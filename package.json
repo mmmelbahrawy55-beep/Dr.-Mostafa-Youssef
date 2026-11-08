@@ -3,6 +3,9 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:web": "vite",
@@ -10,6 +13,7 @@
     "server": "tsx server/index.ts",
     "start": "tsx server/index.ts",
     "build": "tsc --noEmit && vite build",
+    "build:server": "esbuild server/index.ts --bundle --platform=node --packages=external --format=esm --outfile=build/server.mjs --log-level=warning",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview"
   },
@@ -32,6 +36,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.2.1",
+    "esbuild": "^0.28.2",
     "tailwindcss": "^4.3.5",
     "typescript": "^7.0.2",
     "vite": "^8.3.6"

@@ -10,3 +10,8 @@ dist-ssr
 # runtime data (SQLite DB, JWT secret, uploaded screenshots/media)
 data/
 .freebuff/
+
+.vercel
+.env*
+
+build/

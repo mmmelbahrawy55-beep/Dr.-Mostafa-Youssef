@@ -1,0 +1,7 @@
+# Never upload runtime data or local build output to Vercel.
+data/
+dist/
+.freebuff/
+node_modules/
+*.log
+build/

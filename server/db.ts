@@ -8,8 +8,27 @@ import { images } from "../src/lib/images";
 import { hashPassword, nowIso, safeJson } from "./security";
 import type { ContentItem, SiteSettings } from "../shared/types";
 
-export const ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
-export const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(ROOT, "data");
+/**
+ * Project root. Resolved from the module URL when we run as ESM (local dev),
+ * and falls back to the working directory when the code is bundled to CJS for
+ * serverless hosts, where `import.meta` is unavailable.
+ */
+const moduleUrl = (import.meta as { url?: string } | undefined)?.url;
+const moduleRoot =
+  moduleUrl && moduleUrl.startsWith("file:") ? path.resolve(fileURLToPath(new URL("..", moduleUrl))) : process.cwd();
+
+/**
+ * On Vercel the bundle directory is read-only, so runtime data (SQLite file,
+ * uploaded screenshots, media) goes to the writable, but ephemeral, /tmp.
+ * Point DATA_DIR/DB_PATH at a persistent location when a database is attached.
+ */
+const onVercel = Boolean(process.env.VERCEL);
+export const ROOT = process.env.ROOT_DIR ? path.resolve(process.env.ROOT_DIR) : moduleRoot;
+export const DATA_DIR = process.env.DATA_DIR
+  ? path.resolve(process.env.DATA_DIR)
+  : onVercel
+    ? "/tmp/data"
+    : path.join(ROOT, "data");
 export const UPLOAD_DIR = path.join(DATA_DIR, "uploads");
 export const SHOT_DIR = path.join(DATA_DIR, "screenshots");
 export const DIST_DIR = path.join(ROOT, "dist");

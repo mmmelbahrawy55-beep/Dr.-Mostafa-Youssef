@@ -40,8 +40,13 @@ const SESSION_COOKIE = "my_session";
 /* ------------------------------ session secret ----------------------------- */
 
 const secretFile = path.join(DATA_DIR, "jwt-secret");
-if (!existsSync(secretFile)) writeFileSync(secretFile, randomBytes(48).toString("hex"), { mode: 0o600 });
-const secret = new TextEncoder().encode(readFileSync(secretFile, "utf8").trim());
+const secretValue =
+  process.env.JWT_SECRET?.trim() ||
+  (() => {
+    if (!existsSync(secretFile)) writeFileSync(secretFile, randomBytes(48).toString("hex"), { mode: 0o600 });
+    return readFileSync(secretFile, "utf8").trim();
+  })();
+const secret = new TextEncoder().encode(secretValue);
 
 type UserRow = {
   id: number;
@@ -1290,6 +1295,12 @@ app.use((error: any, _req: Request, res: Response, _next: NextFunction) => {
   res.status(500).json({ error: "حصل خطأ في السيرفر. جرب تاني." });
 });
 
-app.listen(PORT, HOST, () => {
-  console.log(`API + app ready on http://${HOST}:${PORT}`);
-});
+// Vercel (and other serverless hosts) import this module and call the exported
+// app themselves, so only bind a port when running as a plain Node server.
+if (!process.env.VERCEL) {
+  app.listen(PORT, HOST, () => {
+    console.log(`API + app ready on http://${HOST}:${PORT}`);
+  });
+}
+
+export default app;

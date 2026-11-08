@@ -44,30 +44,7 @@
     overflow-wrap: anywhere;
   }
 
-  /* Arabic script must never be letter-spaced (it visually breaks the joins). */
   html[lang="ar"] body {
-    letter-spacing: 0 !important;
-  }
-
-  html[lang="ar"] h1,
-  html[lang="ar"] h2,
-  html[lang="ar"] h3,
-  html[lang="ar"] h4,
-  html[lang="ar"] h5 {
-    letter-spacing: 0 !important;
-    line-height: 1.28;
-  }
-
-  html[lang="ar"] :is(.eyebrow, [class*="tracking-"]) {
-    letter-spacing: 0.01em !important;
-  }
-
-  html[lang="ar"] .uppercase {
-    text-transform: none;
-  }
-
-  html[lang="ar"] .display-xl {
-    line-height: 1.18;
     letter-spacing: 0 !important;
   }
 
@@ -417,4 +394,35 @@
   *::after {
     transition-duration: 0.001ms !important;
   }
+}
+
+/* ---------------------------------------------------------------------------
+ * Arabic typography — these rules MUST stay outside every @layer.
+ *
+ * Tailwind v4 puts `.display-xl` in @layer components and `leading-*`,
+ * `tracking-*` and `uppercase` in @layer utilities. A layered declaration
+ * always loses to an unlayered one no matter how specific the selector is,
+ * which is exactly why `leading-[0.98]` was collapsing Arabic headings on top
+ * of each other: the old overrides sat in @layer base and never won.
+ * ------------------------------------------------------------------------ */
+
+html[lang="ar"] :is(h1, h2, h3, h4, h5, h6) {
+  letter-spacing: 0 !important;
+  line-height: 1.35;
+  overflow-wrap: break-word;
+}
+
+/* Display sizes need more room: Arabic glyphs have tall ascenders and deep
+ * descenders that collide at the 0.98–1.15 the Latin design uses. */
+html[lang="ar"] :is(h1, h2, .display-xl) {
+  line-height: 1.25;
+}
+
+/* Letter-spacing visually breaks Arabic joins — keep it effectively off. */
+html[lang="ar"] :is(.eyebrow, [class*="tracking-"]) {
+  letter-spacing: 0.02em !important;
+}
+
+html[lang="ar"] .uppercase {
+  text-transform: none;
 }

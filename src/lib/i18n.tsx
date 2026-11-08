@@ -18,11 +18,12 @@ const STORAGE_KEY = "my-lang";
 
 export function LanguageProvider({ children }: { children: ReactNode }) {
   const { data } = useSiteData();
+  // Default to English on first visit; an explicit choice is remembered.
   const [lang, setLangState] = useState<Lang>(() => {
     try {
-      return localStorage.getItem(STORAGE_KEY) === "en" ? "en" : "ar";
+      return localStorage.getItem(STORAGE_KEY) === "ar" ? "ar" : "en";
     } catch {
-      return "ar";
+      return "en";
     }
   });
 

@@ -7,17 +7,56 @@ import { randomBytes } from "node:crypto";
 import {
   DATA_DIR,
   DIST_DIR,
+  MAX_UPLOAD_BYTES,
   SHOT_DIR,
   UPLOAD_DIR,
-  db,
-  getContent,
+  allPayments,
+  allSubscriptions,
+  countActiveSubscriptions,
+  countExpiringSoon,
+  countUnreadMessages,
+  createMedia,
+  createMessage,
+  createPayment,
+  createSubscription,
+  createUser,
+  customerSummaries,
+  deleteContent,
+  deleteFile,
+  deleteMedia,
+  deleteMessage,
+  expireOldSubscriptions,
+  findActiveSubscription,
+  findPaymentByReferenceKey,
+  findPaymentBySha,
+  findSubscriptionByPayment,
+  findUserByEmail,
+  findUserById,
   getCopyOverrides,
+  getContent,
+  getMedia,
+  getFile,
+  getPayment,
   getSettings,
+  listAudit,
   listContent,
+  listCustomerRows,
+  listMedia,
+  listMessages,
+  listPaymentsByUser,
+  listSubscriptionsByUser,
   logAudit,
+  paymentStats,
+  putFile,
   saveCopyOverrides,
   saveSettings,
+  setMessageRead,
+  setSubscriptionStatus,
+  updatePayment,
+  updateSubscriptionEnds,
+  updateUser,
   upsertContent,
+  type UserRow,
 } from "./db";
 import {
   addDays,
@@ -48,18 +87,6 @@ const secretValue =
   })();
 const secret = new TextEncoder().encode(secretValue);
 
-type UserRow = {
-  id: number;
-  role: "customer" | "admin";
-  name: string;
-  email: string;
-  phone: string;
-  password_salt: string;
-  password_hash: string;
-  blocked: number;
-  created_at: string;
-};
-
 type Authed = Request & { user?: UserRow };
 
 const app = express();
@@ -79,8 +106,6 @@ app.use((_req, res, next) => {
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, time: nowIso() });
 });
-
-app.use("/uploads", express.static(UPLOAD_DIR, { maxAge: "7d", fallthrough: true }));
 
 /* --------------------------------- helpers -------------------------------- */
 
@@ -105,7 +130,7 @@ async function resolveUser(req: Request): Promise<UserRow | null> {
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, secret);
-    const row = db.prepare("SELECT * FROM users WHERE id = ?").get(Number(payload.sub)) as UserRow | undefined;
+    const row = await findUserById(Number(payload.sub));
     if (!row || row.blocked) return null;
     return row;
   } catch {
@@ -160,6 +185,20 @@ async function issueSession(res: Response, user: UserRow) {
 const clearSession = (res: Response) =>
   res.setHeader("Set-Cookie", `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
 
+/** Media files live in Redis, so serve them from there instead of the disk. */
+app.get(
+  "/uploads/:name",
+  asyncRoute(async (req, res) => {
+    const name = path.basename(String(req.params.name ?? ""));
+    const file = await getFile(name);
+    if (!file) return void res.status(404).json({ error: "الصورة غير موجودة." });
+    res.setHeader("Content-Type", file.mime);
+    res.setHeader("Cache-Control", "public, max-age=604800, immutable");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.end(file.buffer);
+  })
+);
+
 /* ------------------------------ rate limiting ----------------------------- */
 
 const buckets = new Map<string, { count: number; reset: number }>();
@@ -197,7 +236,7 @@ const shotUpload = multer({
       done(null, randomName(ext));
     },
   }),
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: MAX_UPLOAD_BYTES },
   fileFilter: imageFilter,
 });
 
@@ -209,7 +248,7 @@ const mediaUpload = multer({
       done(null, randomName(ext));
     },
   }),
-  limits: { fileSize: 12 * 1024 * 1024 },
+  limits: { fileSize: MAX_UPLOAD_BYTES },
   fileFilter: imageFilter,
 });
 
@@ -269,36 +308,32 @@ function imageSize(filePath: string): { width: number | null; height: number | n
 
 /* ------------------------------- subscriptions ---------------------------- */
 
-function activateSubscription(user: UserRow, program: ContentItem, paymentId: number | null, daysOverride?: number) {
+async function activateSubscription(
+  user: UserRow,
+  program: ContentItem,
+  paymentId: number | null,
+  daysOverride?: number
+) {
   const days = Math.max(1, daysOverride ?? int(program.common.days, 30));
   const programName = String(program.ar?.name ?? program.id);
-  const active = db
-    .prepare(
-      `SELECT * FROM subscriptions WHERE user_id = ? AND program_id = ? AND status = 'active'
-       AND ends_at > ? ORDER BY ends_at DESC LIMIT 1`
-    )
-    .get(user.id, program.id, nowIso()) as { id: number; ends_at: string } | undefined;
+  const active = await findActiveSubscription(user.id, program.id, nowIso());
 
   const start = active ? new Date(active.ends_at) : new Date();
   const end = addDays(start, days);
 
   if (active) {
-    db.prepare("UPDATE subscriptions SET ends_at = ? WHERE id = ?").run(end.toISOString(), active.id);
+    await updateSubscriptionEnds(active.id, end.toISOString());
     return active.id;
   }
 
-  const result = db
-    .prepare(
-      `INSERT INTO subscriptions (user_id, program_id, program_name, payment_id, starts_at, ends_at, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'active', ?)`
-    )
-    .run(user.id, program.id, programName, paymentId, start.toISOString(), end.toISOString(), nowIso());
-
-  return Number(result.lastInsertRowid);
-}
-
-function expireOldSubscriptions() {
-  db.prepare("UPDATE subscriptions SET status = 'expired' WHERE status = 'active' AND ends_at <= ?").run(nowIso());
+  return createSubscription({
+    user_id: user.id,
+    program_id: program.id,
+    program_name: programName,
+    payment_id: paymentId,
+    starts_at: start.toISOString(),
+    ends_at: end.toISOString(),
+  });
 }
 
 /* ---------------------------------- auth ---------------------------------- */
@@ -322,18 +357,19 @@ app.post(
     if (password.length < 8) return void res.status(400).json({ error: "الباسورد لازم 8 حروف على الأقل." });
     if (phone && !/^[0-9+\-\s()]{8,20}$/.test(phone)) return void res.status(400).json({ error: "رقم الموبايل مش صحيح." });
 
-    const exists = db.prepare("SELECT id FROM users WHERE email = ?").get(email);
+    const exists = await findUserByEmail(email);
     if (exists) return void res.status(409).json({ error: "الإيميل ده مسجل قبل كده. سجل دخول." });
 
     const { salt, hash } = hashPassword(password);
-    const result = db
-      .prepare(
-        `INSERT INTO users (role, name, email, phone, password_salt, password_hash, created_at)
-         VALUES ('customer', ?, ?, ?, ?, ?, ?)`
-      )
-      .run(name, email, phone, salt, hash, nowIso());
+    const user = await createUser({
+      role: "customer",
+      name,
+      email,
+      phone,
+      password_salt: salt,
+      password_hash: hash,
+    });
 
-    const user = db.prepare("SELECT * FROM users WHERE id = ?").get(Number(result.lastInsertRowid)) as UserRow;
     await issueSession(res, user);
     res.status(201).json({ user: toPublicUser(user) });
   })
@@ -351,7 +387,7 @@ app.post(
       return;
     }
 
-    const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email) as UserRow | undefined;
+    const user = await findUserByEmail(email);
     if (!user || !checkPassword(password, user.password_salt, user.password_hash)) {
       res.status(401).json({ error: "الإيميل أو الباسورد مش صح." });
       return;
@@ -385,16 +421,10 @@ app.get(
   "/api/account",
   requireAuth,
   asyncRoute(async (req, res) => {
-    expireOldSubscriptions();
+    await expireOldSubscriptions(nowIso());
     const user = req.user!;
-    const subscriptions = db
-      .prepare("SELECT * FROM subscriptions WHERE user_id = ? ORDER BY created_at DESC")
-      .all(user.id)
-      .map(mapSubscription);
-    const payments = db
-      .prepare("SELECT * FROM payments WHERE user_id = ? ORDER BY created_at DESC")
-      .all(user.id)
-      .map(mapPayment);
+    const subscriptions = (await listSubscriptionsByUser(user.id)).map((entry) => mapSubscription(entry, user));
+    const payments = (await listPaymentsByUser(user.id)).map((entry) => mapPayment(entry, user));
 
     res.json({ user: toPublicUser(user), subscriptions, payments });
   })
@@ -416,38 +446,47 @@ app.patch(
 
     if (password) {
       const { salt, hash } = hashPassword(password);
-      db.prepare("UPDATE users SET name = ?, phone = ?, password_salt = ?, password_hash = ? WHERE id = ?").run(
-        name,
-        phone,
-        salt,
-        hash,
-        user.id
-      );
+      await updateUser(user.id, { name, phone, password_salt: salt, password_hash: hash });
     } else {
-      db.prepare("UPDATE users SET name = ?, phone = ? WHERE id = ?").run(name, phone, user.id);
+      await updateUser(user.id, { name, phone });
     }
 
-    const updated = db.prepare("SELECT * FROM users WHERE id = ?").get(user.id) as UserRow;
+    const updated = (await findUserById(user.id))!;
     res.json({ user: toPublicUser(updated) });
   })
 );
 
 /* -------------------------------- public site ------------------------------ */
 
-app.get("/api/site", (_req, res) => {
-  res.setHeader("Cache-Control", "no-store");
-  res.json({
-    settings: getSettings(),
-    programs: listContent("programs", true),
-    services: listContent("services", true),
-    testimonials: listContent("testimonials", true),
-    results: listContent("results", true),
-    posts: listContent("posts", true),
-    faqs: listContent("faqs", true),
-    credentials: listContent("credentials", true),
-    copy: getCopyOverrides(),
-  });
-});
+app.get(
+  "/api/site",
+  asyncRoute(async (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const [settings, copy, programs, services, testimonials, results, posts, faqs, credentials] =
+      await Promise.all([
+        getSettings(),
+        getCopyOverrides(),
+        listContent("programs", true),
+        listContent("services", true),
+        listContent("testimonials", true),
+        listContent("results", true),
+        listContent("posts", true),
+        listContent("faqs", true),
+        listContent("credentials", true),
+      ]);
+    res.json({
+      settings,
+      programs,
+      services,
+      testimonials,
+      results,
+      posts,
+      faqs,
+      credentials,
+      copy,
+    });
+  })
+);
 
 app.post(
   "/api/messages",
@@ -462,14 +501,13 @@ app.post(
     if (name.length < 2) return void res.status(400).json({ error: "اكتب اسمك صح." });
     if (!/^[0-9+\-\s()]{8,20}$/.test(phone)) return void res.status(400).json({ error: "رقم الموبايل مش صحيح." });
 
-    db.prepare("INSERT INTO messages (name, phone, email, goal, body, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(
+    await createMessage({
       name,
       phone,
-      str(req.body.email, 160),
-      str(req.body.goal, 120),
-      str(req.body.message, 3000),
-      nowIso()
-    );
+      email: str(req.body.email, 160),
+      goal: str(req.body.goal, 120),
+      body: str(req.body.message, 3000),
+    });
 
     res.status(201).json({ ok: true });
   })
@@ -500,7 +538,7 @@ app.post(
         return;
       }
 
-      const program = getContent(str(req.body.programId, 80));
+      const program = await getContent(str(req.body.programId, 80));
       if (!program || program.collection !== "programs" || !program.active) {
         cleanup();
         res.status(404).json({ error: "الباقة غير متاحة." });
@@ -530,7 +568,7 @@ app.post(
       }
 
       const reasons: string[] = [];
-      const settings = getSettings();
+      const settings = await getSettings();
       if (size < 8 * 1024) reasons.push("حجم الصورة صغير جدًا — تأكد إنها سكرين شوت واضح للتحويل.");
       if (claimed !== amount) reasons.push(`المبلغ المكتوب (${claimed}) لا يطابق سعر الباقة (${amount} ج.م).`);
       if (reference.length < 4) reasons.push("رقم عملية التحويل قصير أو غير مكتمل.");
@@ -542,10 +580,9 @@ app.post(
         reasons.push("أبعاد صورة التحويل صغيرة جدًا — ارفع سكرين شوت أوضح.");
       }
 
-      const duplicateShot = db.prepare("SELECT id FROM payments WHERE screenshot_sha = ?").get(hash);
-      const duplicateRef = db
-        .prepare("SELECT id FROM payments WHERE reference_key = ?")
-        .get(sha256(`${method}:${reference.toLowerCase().replace(/\s+/g, "")}`));
+      const referenceKey = sha256(`${method}:${reference.toLowerCase().replace(/\s+/g, "")}`);
+      const duplicateShot = await findPaymentBySha(hash);
+      const duplicateRef = await findPaymentByReferenceKey(referenceKey);
 
       if (duplicateShot) {
         cleanup();
@@ -559,41 +596,46 @@ app.post(
       }
 
       const status = reasons.length === 0 && settings.payments.autoApprove !== false ? "auto_approved" : "pending";
-      const result = db
-        .prepare(
-          `INSERT INTO payments (user_id, program_id, program_name, amount, days, method, sender, reference,
-             screenshot, screenshot_sha, reference_key, status, risk, created_at, reviewed_at,
-             screenshot_width, screenshot_height)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .run(
-          user.id,
-          program.id,
-          String(program.ar?.name ?? program.id),
+      const filename = path.basename(file.path);
+
+      // Persist the receipt first: a payment row must never point at an image
+      // that is not in the store. Roll the file back if the row fails.
+      await putFile(filename, readFileSync(file.path), file.mimetype || "image/jpeg");
+
+      let paymentId: number;
+      try {
+        paymentId = await createPayment({
+          user_id: user.id,
+          program_id: program.id,
+          program_name: String(program.ar?.name ?? program.id),
           amount,
-          int(program.common.days, 30),
+          days: int(program.common.days, 30),
           method,
           sender,
           reference,
-          path.basename(file.path),
-          hash,
-          sha256(`${method}:${reference.toLowerCase().replace(/\s+/g, "")}`),
+          screenshot: filename,
+          screenshot_sha: hash,
+          reference_key: referenceKey,
           status,
-          JSON.stringify(reasons),
-          nowIso(),
-          status === "auto_approved" ? nowIso() : null,
-          dims.width,
-          dims.height
-        );
+          risk: JSON.stringify(reasons),
+          note: "",
+          created_at: nowIso(),
+          reviewed_at: status === "auto_approved" ? nowIso() : null,
+          screenshot_width: dims.width,
+          screenshot_height: dims.height,
+        });
+      } catch (createError) {
+        await deleteFile(filename).catch(() => undefined);
+        throw createError;
+      }
 
-      const paymentId = Number(result.lastInsertRowid);
       let subscriptionId: number | null = null;
 
       if (status === "auto_approved") {
-        subscriptionId = activateSubscription(user, program, paymentId);
+        subscriptionId = await activateSubscription(user, program, paymentId);
       }
 
-      logAudit(
+      await logAudit(
         user,
         status === "auto_approved" ? "payment.auto_approved" : "payment.submitted",
         "payment",
@@ -627,19 +669,18 @@ app.get(
   requireAuth,
   asyncRoute(async (req, res) => {
     const user = req.user!;
-    const payment = db.prepare("SELECT * FROM payments WHERE id = ?").get(int(req.params.id)) as
-      | { user_id: number; screenshot: string }
-      | undefined;
-
+    const payment = await getPayment(int(req.params.id));
     if (!payment) return void res.status(404).json({ error: "الدفعة غير موجودة." });
     if (user.role !== "admin" && payment.user_id !== user.id) {
       return void res.status(403).json({ error: "مش مسموح." });
     }
 
-    const filePath = path.join(SHOT_DIR, path.basename(payment.screenshot));
-    if (!existsSync(filePath)) return void res.status(404).json({ error: "الصورة مش موجودة." });
+    const file = await getFile(path.basename(payment.screenshot));
+    if (!file) return void res.status(404).json({ error: "الصورة مش موجودة." });
     res.setHeader("Cache-Control", "private, no-store");
-    res.sendFile(filePath);
+    res.setHeader("Content-Type", file.mime);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.end(file.buffer);
   })
 );
 
@@ -649,90 +690,48 @@ app.get(
   "/api/admin/overview",
   requireAdmin,
   asyncRoute(async (_req, res) => {
-    expireOldSubscriptions();
-    const revenue =
-      (db.prepare("SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE status IN ('approved','auto_approved')").get() as any)
-        .total ?? 0;
-    const today = new Date().toISOString().slice(0, 10);
-    const month = today.slice(0, 7);
-    const todayRevenue =
-      (db
-        .prepare(
-          "SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE status IN ('approved','auto_approved') AND substr(created_at,1,10) = ?"
-        )
-        .get(today) as any).total ?? 0;
-    const monthRevenue =
-      (db
-        .prepare(
-          "SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE status IN ('approved','auto_approved') AND substr(created_at,1,7) = ?"
-        )
-        .get(month) as any).total ?? 0;
-    const pending = db.prepare("SELECT COUNT(*) AS c, COALESCE(SUM(amount),0) AS s FROM payments WHERE status = 'pending'").get() as any;
-    const customers = (db.prepare("SELECT COUNT(*) AS c FROM users WHERE role = 'customer'").get() as any).c;
-    const newCustomers = (
-      db.prepare("SELECT COUNT(*) AS c FROM users WHERE role = 'customer' AND substr(created_at,1,7) = ?").get(month) as any
-    ).c;
-    const activeSubs = (db.prepare("SELECT COUNT(*) AS c FROM subscriptions WHERE status = 'active' AND ends_at > ?").get(nowIso()) as any).c;
-    const expiringSoon = (
-      db
-        .prepare(
-          "SELECT COUNT(*) AS c FROM subscriptions WHERE status = 'active' AND ends_at > ? AND ends_at <= ?"
-        )
-        .get(nowIso(), addDays(new Date(), 7).toISOString()) as any
-    ).c;
-    const unread = (db.prepare("SELECT COUNT(*) AS c FROM messages WHERE read = 0").get() as any).c;
-    const approved = (db.prepare("SELECT COUNT(*) AS c FROM payments WHERE status = 'approved'").get() as any).c;
-    const auto = (db.prepare("SELECT COUNT(*) AS c FROM payments WHERE status = 'auto_approved'").get() as any).c;
-    const rejected = (db.prepare("SELECT COUNT(*) AS c FROM payments WHERE status = 'rejected'").get() as any).c;
+    await expireOldSubscriptions(nowIso());
+    const now = nowIso();
+    const month = now.slice(0, 7);
 
-    const monthly: { month: string; total: number }[] = [];
-    for (let i = 5; i >= 0; i -= 1) {
-      const date = new Date();
-      date.setDate(1);
-      date.setMonth(date.getMonth() - i);
-      const key = date.toISOString().slice(0, 7);
-      const row = db
-        .prepare(
-          `SELECT COALESCE(SUM(amount),0) AS total FROM payments
-           WHERE status IN ('approved','auto_approved') AND substr(created_at,1,7) = ?`
-        )
-        .get(key) as any;
-      monthly.push({ month: key, total: Number(row?.total ?? 0) });
-    }
+    const [stats, customerRows, activeSubs, expiringSoon, unread, allPaymentRows] = await Promise.all([
+      paymentStats(),
+      listCustomerRows(),
+      countActiveSubscriptions(now),
+      countExpiringSoon(now, addDays(new Date(), 7).toISOString()),
+      countUnreadMessages(),
+      allPayments(),
+    ]);
 
-    const recentPayments = db
-      .prepare(
-        `SELECT p.*, u.name AS user_name, u.email AS user_email, u.phone AS user_phone FROM payments p
-         JOIN users u ON u.id = p.user_id ORDER BY p.created_at DESC LIMIT 6`
-      )
-      .all()
-      .map(mapPayment);
+    const customers = customerRows.length;
+    const newCustomers = customerRows.filter((row) => String(row.created_at).slice(0, 7) === month).length;
+    const recentPayments = await Promise.all(allPaymentRows.slice(0, 6).map(mapPaymentWithUser));
 
     res.json({
-      revenue: Number(revenue),
-      todayRevenue: Number(todayRevenue),
-      monthRevenue: Number(monthRevenue),
-      pendingCount: Number(pending.c),
-      pendingAmount: Number(pending.s),
-      customers: Number(customers),
-      newCustomers: Number(newCustomers),
-      activeSubscriptions: Number(activeSubs),
-      expiringSoon: Number(expiringSoon),
-      unreadMessages: Number(unread),
-      monthly,
+      revenue: stats.revenue,
+      todayRevenue: stats.todayRevenue,
+      monthRevenue: stats.monthRevenue,
+      pendingCount: stats.pendingCount,
+      pendingAmount: stats.pendingAmount,
+      customers,
+      newCustomers,
+      activeSubscriptions: activeSubs,
+      expiringSoon,
+      unreadMessages: unread,
+      monthly: stats.monthly,
       recentPayments,
-      totals: { approved: Number(approved), auto: Number(auto), rejected: Number(rejected) },
+      totals: { approved: stats.approved, auto: stats.auto, rejected: stats.rejected },
     });
   })
 );
 
-function mapPayment(row: any) {
+function mapPayment(row: any, user?: Partial<UserRow> | null) {
   return {
     id: Number(row.id),
     userId: Number(row.user_id),
-    userName: row.user_name,
-    userEmail: row.user_email,
-    userPhone: row.user_phone,
+    userName: row.user_name ?? user?.name,
+    userEmail: row.user_email ?? user?.email,
+    userPhone: row.user_phone ?? user?.phone,
     programId: row.program_id,
     programName: row.program_name,
     amount: Number(row.amount),
@@ -751,16 +750,17 @@ function mapPayment(row: any) {
   };
 }
 
+async function mapPaymentWithUser(row: any) {
+  return mapPayment(row, await findUserById(Number(row.user_id)));
+}
+
 app.get(
   "/api/admin/payments",
   requireAdmin,
   asyncRoute(async (req, res) => {
     const status = str(req.query.status, 20);
-    const query = `SELECT p.*, u.name AS user_name, u.email AS user_email, u.phone AS user_phone FROM payments p
-      JOIN users u ON u.id = p.user_id ${status ? "WHERE p.status = ?" : ""}
-      ORDER BY p.created_at DESC LIMIT 300`;
-    const rows = (status ? db.prepare(query).all(status) : db.prepare(query).all()) as any[];
-    res.json({ payments: rows.map(mapPayment) });
+    const rows = (await allPayments()).filter((row) => !status || row.status === status).slice(0, 300);
+    res.json({ payments: await Promise.all(rows.map(mapPaymentWithUser)) });
   })
 );
 
@@ -771,24 +771,24 @@ app.post(
     const id = int(req.params.id);
     const action = str(req.body.action, 20);
     const note = str(req.body.note, 500);
-    const payment = db.prepare("SELECT * FROM payments WHERE id = ?").get(id) as any;
+    const payment = await getPayment(id);
     if (!payment) return void res.status(404).json({ error: "الدفعة غير موجودة." });
     if (!["approve", "reject"].includes(action)) return void res.status(400).json({ error: "إجراء غير معروف." });
 
     const status = action === "approve" ? "approved" : "rejected";
-    db.prepare("UPDATE payments SET status = ?, note = ?, reviewed_at = ? WHERE id = ?").run(status, note, nowIso(), id);
+    await updatePayment(id, { status, note, reviewed_at: nowIso() });
 
     let subscriptionId: number | null = null;
     if (action === "approve") {
-      const user = db.prepare("SELECT * FROM users WHERE id = ?").get(payment.user_id) as UserRow;
-      const program = getContent(payment.program_id);
+      const user = await findUserById(payment.user_id);
+      const program = await getContent(payment.program_id);
       if (user && program) {
-        const existing = db.prepare("SELECT id FROM subscriptions WHERE payment_id = ?").get(id);
-        if (!existing) subscriptionId = activateSubscription(user, program, id);
+        const existing = await findSubscriptionByPayment(id);
+        if (!existing) subscriptionId = await activateSubscription(user, program, id);
       }
     }
 
-    logAudit(req.user, `payment.${action}`, "payment", id, { note, subscriptionId });
+    await logAudit(req.user, `payment.${action}`, "payment", id, { note, subscriptionId });
     res.json({ ok: true, status, subscriptionId });
   })
 );
@@ -797,30 +797,35 @@ app.get(
   "/api/admin/customers",
   requireAdmin,
   asyncRoute(async (req, res) => {
-    const search = `%${str(req.query.q, 80).toLowerCase()}%`;
-    res.json({ customers: listCustomers(search) });
+    res.json({ customers: await listCustomers(str(req.query.q, 80)) });
   })
 );
 
-function listCustomers(search: string) {
-  const rows = db
-    .prepare(
-      `SELECT u.*,
-         (SELECT COUNT(*) FROM subscriptions s WHERE s.user_id = u.id AND s.status = 'active' AND s.ends_at > ?) AS active_subs,
-         (SELECT COALESCE(SUM(amount),0) FROM payments p WHERE p.user_id = u.id AND p.status IN ('approved','auto_approved')) AS spent,
-         (SELECT MAX(ends_at) FROM subscriptions s WHERE s.user_id = u.id AND s.status = 'active' AND s.ends_at > ?) AS ends_at
-       FROM users u WHERE u.role = 'customer'
-       AND (lower(u.name) LIKE ? OR lower(u.email) LIKE ? OR u.phone LIKE ?)
-       ORDER BY u.created_at DESC LIMIT 500`
-    )
-    .all(nowIso(), nowIso(), search, search, search) as any[];
+async function listCustomers(search: string) {
+  const now = nowIso();
+  const [rows, summaries] = await Promise.all([listCustomerRows(), customerSummaries(now)]);
+  const needle = search.trim().toLowerCase();
 
-  return rows.map((row) => ({
-    ...toPublicUser(row),
-    activeSubscriptions: Number(row.active_subs ?? 0),
-    spent: Number(row.spent ?? 0),
-    endsAt: row.ends_at ?? null,
-  }));
+  return rows
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+    .filter((row) => {
+      if (!needle) return true;
+      return (
+        row.name.toLowerCase().includes(needle) ||
+        row.email.toLowerCase().includes(needle) ||
+        String(row.phone ?? "").includes(needle)
+      );
+    })
+    .slice(0, 500)
+    .map((row) => {
+      const summary = summaries.get(row.id);
+      return {
+        ...toPublicUser(row),
+        activeSubscriptions: summary?.activeSubscriptions ?? 0,
+        spent: summary?.spent ?? 0,
+        endsAt: summary?.endsAt ?? null,
+      };
+    });
 }
 
 app.get(
@@ -828,27 +833,19 @@ app.get(
   requireAdmin,
   asyncRoute(async (req, res) => {
     const id = int(req.params.id);
-    const row = db.prepare("SELECT * FROM users WHERE id = ? AND role = 'customer'").get(id) as UserRow | undefined;
-    if (!row) return void res.status(404).json({ error: "العميل غير موجود." });
+    const row = await findUserById(id);
+    if (!row || row.role !== "customer") return void res.status(404).json({ error: "العميل غير موجود." });
 
-    const customer = listCustomers("%").find((entry) => entry.id === id) ?? {
-      ...toPublicUser(row),
-      activeSubscriptions: 0,
-      spent: 0,
-      endsAt: null,
-    };
+    const customer =
+      (await listCustomers("")).find((entry) => entry.id === id) ?? {
+        ...toPublicUser(row),
+        activeSubscriptions: 0,
+        spent: 0,
+        endsAt: null,
+      };
 
-    const subscriptions = db
-      .prepare("SELECT * FROM subscriptions WHERE user_id = ? ORDER BY created_at DESC")
-      .all(id)
-      .map(mapSubscription);
-    const payments = db
-      .prepare(
-        `SELECT p.*, u.name AS user_name, u.email AS user_email, u.phone AS user_phone FROM payments p
-         JOIN users u ON u.id = p.user_id WHERE p.user_id = ? ORDER BY p.created_at DESC`
-      )
-      .all(id)
-      .map(mapPayment);
+    const subscriptions = (await listSubscriptionsByUser(id)).map((entry) => mapSubscription(entry, row));
+    const payments = (await listPaymentsByUser(id)).map((payment) => mapPayment(payment, row));
 
     res.json({ customer, subscriptions, payments });
   })
@@ -865,18 +862,21 @@ app.post(
     if (name.length < 2) return void res.status(400).json({ error: "اكتب اسم العميل." });
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return void res.status(400).json({ error: "الإيميل مش صحيح." });
     if (password.length < 8) return void res.status(400).json({ error: "الباسورد لازم 8 حروف على الأقل." });
-    if (db.prepare("SELECT id FROM users WHERE email = ?").get(email)) {
+    const exists = await findUserByEmail(email);
+    if (exists) {
       return void res.status(409).json({ error: "الإيميل مسجل بالفعل." });
     }
     const { salt, hash } = hashPassword(password);
-    const result = db
-      .prepare(
-        `INSERT INTO users (role, name, email, phone, password_salt, password_hash, created_at)
-         VALUES ('customer', ?, ?, ?, ?, ?, ?)`
-      )
-      .run(name, email, phone, salt, hash, nowIso());
-    logAudit(req.user, "customer.create", "user", Number(result.lastInsertRowid), { email });
-    res.status(201).json({ ok: true, id: Number(result.lastInsertRowid) });
+    const created = await createUser({
+      role: "customer",
+      name,
+      email,
+      phone,
+      password_salt: salt,
+      password_hash: hash,
+    });
+    await logAudit(req.user, "customer.create", "user", created.id, { email });
+    res.status(201).json({ ok: true, id: created.id });
   })
 );
 
@@ -885,58 +885,61 @@ app.patch(
   requireAdmin,
   asyncRoute(async (req, res) => {
     const id = int(req.params.id);
-    const target = db.prepare("SELECT * FROM users WHERE id = ?").get(id) as UserRow | undefined;
+    const target = await findUserById(id);
     if (!target) return void res.status(404).json({ error: "العميل غير موجود." });
     if (target.role === "admin") return void res.status(400).json({ error: "مش ممكن تعديل حساب الدكتور من هنا." });
 
-    const updates: string[] = [];
-    const values: (string | number)[] = [];
+    const patch: Partial<UserRow> = {};
+    const fields: string[] = [];
 
     if (req.body.blocked !== undefined) {
-      updates.push("blocked = ?");
-      values.push(req.body.blocked ? 1 : 0);
+      patch.blocked = req.body.blocked ? 1 : 0;
+      fields.push("blocked");
     }
     if (req.body.name !== undefined) {
       const name = str(req.body.name, 80);
       if (name.length < 2) return void res.status(400).json({ error: "الاسم قصير." });
-      updates.push("name = ?");
-      values.push(name);
+      patch.name = name;
+      fields.push("name");
     }
     if (req.body.phone !== undefined) {
-      updates.push("phone = ?");
-      values.push(str(req.body.phone, 24));
+      patch.phone = str(req.body.phone, 24);
+      fields.push("phone");
     }
     if (req.body.email !== undefined) {
       const email = str(req.body.email, 160).toLowerCase();
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return void res.status(400).json({ error: "الإيميل مش صحيح." });
-      const conflict = db.prepare("SELECT id FROM users WHERE email = ? AND id <> ?").get(email, id);
-      if (conflict) return void res.status(409).json({ error: "الإيميل مستخدم لحساب تاني." });
-      updates.push("email = ?");
-      values.push(email);
+      const conflict = await findUserByEmail(email);
+      if (conflict && conflict.id !== id) {
+        return void res.status(409).json({ error: "الإيميل مستخدم لحساب تاني." });
+      }
+      patch.email = email;
+      fields.push("email");
     }
     if (req.body.password) {
       const password = String(req.body.password);
       if (password.length < 8) return void res.status(400).json({ error: "الباسورد لازم 8 حروف على الأقل." });
       const { salt, hash } = hashPassword(password);
-      updates.push("password_salt = ?", "password_hash = ?");
-      values.push(salt, hash);
+      patch.password_salt = salt;
+      patch.password_hash = hash;
+      fields.push("password");
     }
 
-    if (updates.length > 0) {
-      db.prepare(`UPDATE users SET ${updates.join(", ")} WHERE id = ?`).run(...values, id);
+    if (fields.length > 0) {
+      await updateUser(id, patch);
     }
-    logAudit(req.user, "customer.update", "user", id, { fields: updates.map((entry) => entry.split(" ")[0]) });
-    const updated = db.prepare("SELECT * FROM users WHERE id = ?").get(id) as UserRow;
+    await logAudit(req.user, "customer.update", "user", id, { fields });
+    const updated = (await findUserById(id))!;
     res.json({ ok: true, user: toPublicUser(updated) });
   })
 );
 
-function mapSubscription(row: any) {
+function mapSubscription(row: any, user?: Partial<UserRow> | null) {
   return {
     id: Number(row.id),
     userId: Number(row.user_id),
-    userName: row.user_name,
-    userEmail: row.user_email,
+    userName: row.user_name ?? user?.name,
+    userEmail: row.user_email ?? user?.email,
     programId: row.program_id,
     programName: row.program_name,
     paymentId: row.payment_id,
@@ -947,19 +950,18 @@ function mapSubscription(row: any) {
   };
 }
 
+async function mapSubscriptionWithUser(row: any) {
+  return mapSubscription(row, await findUserById(Number(row.user_id)));
+}
+
 app.get(
   "/api/admin/subscriptions",
   requireAdmin,
   asyncRoute(async (_req, res) => {
-    expireOldSubscriptions();
-    const rows = db
-      .prepare(
-        `SELECT s.*, u.name AS user_name, u.email AS user_email FROM subscriptions s
-         JOIN users u ON u.id = s.user_id ORDER BY s.created_at DESC LIMIT 500`
-      )
-      .all() as any[];
+    await expireOldSubscriptions(nowIso());
+    const rows = (await allSubscriptions()).slice(0, 500);
 
-    res.json({ subscriptions: rows.map(mapSubscription) });
+    res.json({ subscriptions: await Promise.all(rows.map(mapSubscriptionWithUser)) });
   })
 );
 
@@ -970,14 +972,14 @@ app.post(
     const userId = int(req.body.userId);
     const programId = str(req.body.programId, 80);
     const days = int(req.body.days, 0);
-    const user = db.prepare("SELECT * FROM users WHERE id = ? AND role = 'customer'").get(userId) as UserRow | undefined;
-    if (!user) return void res.status(404).json({ error: "العميل غير موجود." });
-    const program = getContent(programId);
+    const user = await findUserById(userId);
+    if (!user || user.role !== "customer") return void res.status(404).json({ error: "العميل غير موجود." });
+    const program = await getContent(programId);
     if (!program || program.collection !== "programs") {
       return void res.status(404).json({ error: "الباقة غير موجودة." });
     }
-    const subscriptionId = activateSubscription(user, program, null, days > 0 ? days : undefined);
-    logAudit(req.user, "subscription.grant", "subscription", subscriptionId, { userId, programId, days });
+    const subscriptionId = await activateSubscription(user, program, null, days > 0 ? days : undefined);
+    await logAudit(req.user, "subscription.grant", "subscription", subscriptionId, { userId, programId, days });
     res.status(201).json({ ok: true, subscriptionId });
   })
 );
@@ -991,8 +993,8 @@ app.post(
     if (!["active", "cancelled", "expired"].includes(status)) {
       return void res.status(400).json({ error: "حالة غير معروفة." });
     }
-    db.prepare("UPDATE subscriptions SET status = ? WHERE id = ?").run(status, id);
-    logAudit(req.user, "subscription.status", "subscription", id, { status });
+    await setSubscriptionStatus(id, status);
+    await logAudit(req.user, "subscription.status", "subscription", id, { status });
     res.json({ ok: true });
   })
 );
@@ -1001,7 +1003,7 @@ app.get(
   "/api/admin/messages",
   requireAdmin,
   asyncRoute(async (_req, res) => {
-    const rows = db.prepare("SELECT * FROM messages ORDER BY created_at DESC LIMIT 500").all() as any[];
+    const rows = await listMessages(500);
     res.json({
       messages: rows.map((row) => ({
         id: Number(row.id),
@@ -1021,7 +1023,7 @@ app.patch(
   "/api/admin/messages/:id",
   requireAdmin,
   asyncRoute(async (req, res) => {
-    db.prepare("UPDATE messages SET read = ? WHERE id = ?").run(req.body.read ? 1 : 0, int(req.params.id));
+    await setMessageRead(int(req.params.id), Boolean(req.body.read));
     res.json({ ok: true });
   })
 );
@@ -1030,8 +1032,9 @@ app.delete(
   "/api/admin/messages/:id",
   requireAdmin,
   asyncRoute(async (req, res) => {
-    db.prepare("DELETE FROM messages WHERE id = ?").run(int(req.params.id));
-    logAudit(req.user, "message.delete", "message", int(req.params.id));
+    const deletedId = int(req.params.id);
+    await deleteMessage(deletedId);
+    await logAudit(req.user, "message.delete", "message", deletedId);
     res.json({ ok: true });
   })
 );
@@ -1044,7 +1047,7 @@ app.get(
   asyncRoute(async (req, res) => {
     const collection = str(req.params.collection, 30);
     if (!COLLECTIONS.includes(collection)) return void res.status(400).json({ error: "قسم غير معروف." });
-    res.json({ items: listContent(collection) });
+    res.json({ items: await listContent(collection) });
   })
 );
 
@@ -1069,8 +1072,8 @@ app.post(
     if (!COLLECTIONS.includes(collection)) return void res.status(400).json({ error: "قسم غير معروف." });
     const item = readItem(req, collection);
     if (!item.id) return void res.status(400).json({ error: "محتاج معرّف للعنصر." });
-    upsertContent(item);
-    logAudit(req.user, "content.create", collection, item.id);
+    await upsertContent(item);
+    await logAudit(req.user, "content.create", collection, item.id);
     res.status(201).json({ item });
   })
 );
@@ -1082,7 +1085,7 @@ app.patch(
     const collection = str(req.params.collection, 30);
     if (!COLLECTIONS.includes(collection)) return void res.status(400).json({ error: "قسم غير معروف." });
     const id = str(req.params.id, 80);
-    const existing = getContent(id);
+    const existing = await getContent(id);
     if (!existing) return void res.status(404).json({ error: "العنصر غير موجود." });
 
     const item: ContentItem = {
@@ -1095,8 +1098,8 @@ app.patch(
       en: req.body.en !== undefined ? safeJson(req.body.en, existing.en) : existing.en,
     };
 
-    upsertContent(item);
-    logAudit(req.user, "content.update", collection, id);
+    await upsertContent(item);
+    await logAudit(req.user, "content.update", collection, id);
     res.json({ item });
   })
 );
@@ -1105,8 +1108,10 @@ app.delete(
   "/api/admin/content/:collection/:id",
   requireAdmin,
   asyncRoute(async (req, res) => {
-    db.prepare("DELETE FROM content_items WHERE id = ? AND collection = ?").run(str(req.params.id, 80), str(req.params.collection, 30));
-    logAudit(req.user, "content.delete", str(req.params.collection, 30), str(req.params.id, 80));
+    const targetId = str(req.params.id, 80);
+    const targetCollection = str(req.params.collection, 30);
+    await deleteContent(targetId, targetCollection);
+    await logAudit(req.user, "content.delete", targetCollection, targetId);
     res.json({ ok: true });
   })
 );
@@ -1115,7 +1120,7 @@ app.get(
   "/api/admin/settings",
   requireAdmin,
   asyncRoute(async (_req, res) => {
-    res.json({ settings: getSettings() });
+    res.json({ settings: await getSettings() });
   })
 );
 
@@ -1124,7 +1129,7 @@ app.put(
   requireAdmin,
   asyncRoute(async (req, res) => {
     const incoming = (req.body ?? {}) as SiteSettings;
-    const current = getSettings();
+    const current = await getSettings();
     const next: SiteSettings = {
       contact: { ...current.contact, ...(incoming.contact ?? {}) },
       payments: {
@@ -1148,8 +1153,8 @@ app.put(
       }
     }
 
-    saveSettings(next);
-    logAudit(req.user, "settings.update", "settings", "site");
+    await saveSettings(next);
+    await logAudit(req.user, "settings.update", "settings", "site");
     res.json({ settings: next });
   })
 );
@@ -1158,7 +1163,7 @@ app.get(
   "/api/admin/copy",
   requireAdmin,
   asyncRoute(async (_req, res) => {
-    res.json({ copy: getCopyOverrides() });
+    res.json({ copy: await getCopyOverrides() });
   })
 );
 
@@ -1181,8 +1186,8 @@ app.put(
     if (JSON.stringify(next).length > 400_000) {
       return void res.status(400).json({ error: "حجم النصوص كبير جدًا." });
     }
-    saveCopyOverrides(next);
-    logAudit(req.user, "copy.update", "settings", "copy");
+    await saveCopyOverrides(next);
+    await logAudit(req.user, "copy.update", "settings", "copy");
     res.json({ copy: next });
   })
 );
@@ -1191,7 +1196,7 @@ app.get(
   "/api/admin/audit",
   requireAdmin,
   asyncRoute(async (_req, res) => {
-    const rows = db.prepare("SELECT * FROM audit_log ORDER BY created_at DESC LIMIT 200").all() as any[];
+    const rows = await listAudit(200);
     res.json({
       entries: rows.map((row) => ({
         id: Number(row.id),
@@ -1210,7 +1215,7 @@ app.get(
   "/api/admin/media",
   requireAdmin,
   asyncRoute(async (_req, res) => {
-    const rows = db.prepare("SELECT * FROM media ORDER BY created_at DESC LIMIT 200").all() as any[];
+    const rows = await listMedia(200);
     res.json({
       media: rows.map((row) => ({
         id: Number(row.id),
@@ -1240,13 +1245,34 @@ app.post(
       }
       return void res.status(400).json({ error: "ارفع صورة صحيحة (JPG/PNG/WebP)." });
     }
-    const url = `/uploads/${path.basename(file.path)}`;
-    const result = db
-      .prepare("INSERT INTO media (url, filename, mime, size, created_at) VALUES (?, ?, ?, ?, ?)")
-      .run(url, path.basename(file.path), file.mimetype, file.size, nowIso());
-    logAudit(req.user, "media.upload", "media", Number(result.lastInsertRowid), { url });
+    const filename = path.basename(file.path);
+    const url = `/uploads/${filename}`;
+    const bytes = readFileSync(file.path);
+
+    let mediaId: number;
+    try {
+      await putFile(filename, bytes, file.mimetype || "application/octet-stream");
+      mediaId = await createMedia({
+        url,
+        filename,
+        mime: file.mimetype,
+        size: file.size,
+        created_at: nowIso(),
+      });
+    } catch (error) {
+      await deleteFile(filename).catch(() => undefined);
+      throw error;
+    } finally {
+      try {
+        unlinkSync(file.path);
+      } catch {
+        /* already gone */
+      }
+    }
+
+    await logAudit(req.user, "media.upload", "media", mediaId, { url });
     res.status(201).json({
-      media: { id: Number(result.lastInsertRowid), url, filename: path.basename(file.path), mime: file.mimetype, size: file.size, createdAt: nowIso() },
+      media: { id: mediaId, url, filename, mime: file.mimetype, size: file.size, createdAt: nowIso() },
     });
   })
 );
@@ -1256,15 +1282,11 @@ app.delete(
   requireAdmin,
   asyncRoute(async (req, res) => {
     const id = int(req.params.id);
-    const row = db.prepare("SELECT * FROM media WHERE id = ?").get(id) as { filename: string } | undefined;
+    const row = await getMedia(id);
     if (!row) return void res.status(404).json({ error: "الصورة غير موجودة." });
-    db.prepare("DELETE FROM media WHERE id = ?").run(id);
-    try {
-      unlinkSync(path.join(UPLOAD_DIR, path.basename(row.filename)));
-    } catch {
-      /* file already gone */
-    }
-    logAudit(req.user, "media.delete", "media", id);
+    await deleteMedia(id);
+    await deleteFile(path.basename(row.filename)).catch(() => undefined);
+    await logAudit(req.user, "media.delete", "media", id);
     res.json({ ok: true });
   })
 );

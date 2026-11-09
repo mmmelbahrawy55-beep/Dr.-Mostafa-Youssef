@@ -1,29 +1,27 @@
-import { DatabaseSync } from "node:sqlite";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { Redis } from "@upstash/redis";
 import { ar } from "../src/content/ar";
 import { en } from "../src/content/en";
 import { images } from "../src/lib/images";
 import { hashPassword, nowIso, safeJson } from "./security";
 import type { ContentItem, SiteSettings } from "../shared/types";
 
-/**
- * Project root. Resolved from the module URL when we run as ESM (local dev),
- * and falls back to the working directory when the code is bundled to CJS for
- * serverless hosts, where `import.meta` is unavailable.
- */
+/* ------------------------------- project root ------------------------------ */
+
 const moduleUrl = (import.meta as { url?: string } | undefined)?.url;
 const moduleRoot =
   moduleUrl && moduleUrl.startsWith("file:") ? path.resolve(fileURLToPath(new URL("..", moduleUrl))) : process.cwd();
 
-/**
- * On Vercel the bundle directory is read-only, so runtime data (SQLite file,
- * uploaded screenshots, media) goes to the writable, but ephemeral, /tmp.
- * Point DATA_DIR/DB_PATH at a persistent location when a database is attached.
- */
 const onVercel = Boolean(process.env.VERCEL);
 export const ROOT = process.env.ROOT_DIR ? path.resolve(process.env.ROOT_DIR) : moduleRoot;
+
+/**
+ * Uploads are staged on disk only long enough to validate the image and read
+ * its bytes; the bytes themselves live in Redis (see putFile below), so the
+ * ephemeral /tmp on Vercel never holds anything that must survive.
+ */
 export const DATA_DIR = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
   : onVercel
@@ -37,119 +35,152 @@ for (const dir of [DATA_DIR, UPLOAD_DIR, SHOT_DIR]) {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 }
 
-export const db = new DatabaseSync(process.env.DB_PATH ?? path.join(DATA_DIR, "app.db"));
+/* --------------------------------- env files -------------------------------- */
 
-db.exec(`
-  PRAGMA journal_mode = WAL;
-  PRAGMA foreign_keys = ON;
+/**
+ * Local dev runs `tsx server/index.ts` directly, so load `.env.local` by hand.
+ *
+ * Only the keys this process actually needs are imported: a file pulled with
+ * `vercel env pull` also contains `VERCEL=1` and friends, and copying those
+ * across would make local runs think they are serverless and skip listening.
+ */
+const LOCAL_KEYS = [
+  "KV_REST_API_URL",
+  "KV_REST_API_TOKEN",
+  "KV_URL",
+  "REDIS_URL",
+  "JWT_SECRET",
+  "ADMIN_EMAIL",
+  "ADMIN_PASSWORD",
+];
 
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    role TEXT NOT NULL DEFAULT 'customer',
-    name TEXT NOT NULL,
-    email TEXT NOT NULL UNIQUE,
-    phone TEXT NOT NULL DEFAULT '',
-    password_salt TEXT NOT NULL,
-    password_hash TEXT NOT NULL,
-    blocked INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL
+function loadLocalEnv() {
+  if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) return;
+  for (const candidate of [path.join(ROOT, ".env.local"), path.join(process.cwd(), ".env.local")]) {
+    if (!existsSync(candidate)) continue;
+    for (const line of readFileSync(candidate, "utf8").split(/\r?\n/)) {
+      const match = /^\s*([A-Za-z0-9_]+)\s*=\s*(.*)$/.exec(line);
+      if (!match || !LOCAL_KEYS.includes(match[1])) continue;
+      let value = match[2].trim();
+      if (
+        (value.startsWith('"') && value.endsWith('"') && value.length > 1) ||
+        (value.startsWith("'") && value.endsWith("'") && value.length > 1)
+      ) {
+        value = value.slice(1, -1);
+      }
+      if (process.env[match[1]] === undefined) process.env[match[1]] = value;
+    }
+    return;
+  }
+}
+loadLocalEnv();
+
+/* -------------------------------- redis client ------------------------------ */
+
+const KV_URL = process.env.KV_REST_API_URL || process.env.REDIS_URL || "";
+const KV_TOKEN = process.env.KV_REST_API_TOKEN || "";
+
+if (!KV_URL.startsWith("http") || KV_TOKEN.length < 20) {
+  throw new Error(
+    "[db] Missing Upstash credentials. Set KV_REST_API_URL and KV_REST_API_TOKEN (Vercel project env, or .env.local for local dev)."
   );
+}
 
-  CREATE TABLE IF NOT EXISTS content_items (
-    id TEXT PRIMARY KEY,
-    collection TEXT NOT NULL,
-    sort INTEGER NOT NULL DEFAULT 0,
-    active INTEGER NOT NULL DEFAULT 1,
-    common TEXT NOT NULL DEFAULT '{}',
-    ar TEXT NOT NULL DEFAULT '{}',
-    en TEXT NOT NULL DEFAULT '{}'
-  );
-  CREATE INDEX IF NOT EXISTS idx_content_collection ON content_items(collection, sort);
+/**
+ * `automaticDeserialization: false` keeps every value as the exact string we
+ * stored, so JSON blobs round-trip untouched.
+ */
+export const redis = new Redis({ url: KV_URL, token: KV_TOKEN, automaticDeserialization: false });
 
-  CREATE TABLE IF NOT EXISTS payments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL REFERENCES users(id),
-    program_id TEXT NOT NULL,
-    program_name TEXT NOT NULL,
-    amount INTEGER NOT NULL,
-    days INTEGER NOT NULL DEFAULT 30,
-    method TEXT NOT NULL,
-    sender TEXT NOT NULL,
-    reference TEXT NOT NULL,
-    screenshot TEXT NOT NULL,
-    screenshot_sha TEXT NOT NULL UNIQUE,
-    reference_key TEXT NOT NULL UNIQUE,
-    status TEXT NOT NULL,
-    risk TEXT NOT NULL DEFAULT '[]',
-    note TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL,
-    reviewed_at TEXT
-  );
-  CREATE INDEX IF NOT EXISTS idx_payments_user ON payments(user_id, created_at DESC);
-  CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status, created_at DESC);
+/* ------------------------------ table primitives ---------------------------- */
 
-  CREATE TABLE IF NOT EXISTS subscriptions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL REFERENCES users(id),
-    program_id TEXT NOT NULL,
-    program_name TEXT NOT NULL,
-    payment_id INTEGER,
-    starts_at TEXT NOT NULL,
-    ends_at TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'active',
-    created_at TEXT NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS idx_subs_user ON subscriptions(user_id, ends_at DESC);
+type Row = Record<string, any>;
 
-  CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    phone TEXT NOT NULL,
-    email TEXT NOT NULL DEFAULT '',
-    goal TEXT NOT NULL DEFAULT '',
-    body TEXT NOT NULL DEFAULT '',
-    read INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL
-  );
+const tableKey = (table: string) => `dm:t:${table}`;
+const seqKey = (table: string) => `dm:s:${table}`;
+const settingKey = (key: string) => `dm:set:${key}`;
+const fileKey = (name: string) => `dm:f:${name}`;
 
-  CREATE TABLE IF NOT EXISTS media (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    url TEXT NOT NULL,
-    filename TEXT NOT NULL,
-    mime TEXT NOT NULL DEFAULT '',
-    size INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL
-  );
+/** `hgetall` answers with a flat [field, value, ...] array when auto-parse is off. */
+function toPairs(raw: unknown): [string, string][] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) {
+    const out: [string, string][] = [];
+    for (let i = 0; i + 1 < raw.length; i += 2) out.push([String(raw[i]), String(raw[i + 1])]);
+    return out;
+  }
+  if (typeof raw === "object") {
+    return Object.entries(raw as Record<string, unknown>).map(([key, value]) => [key, String(value)]);
+  }
+  return [];
+}
 
-  CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS audit_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    actor_id INTEGER,
-    actor_name TEXT NOT NULL DEFAULT '',
-    action TEXT NOT NULL,
-    entity TEXT NOT NULL DEFAULT '',
-    entity_id TEXT NOT NULL DEFAULT '',
-    meta TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at DESC);
-`);
-
-/* ------------------------------- migrations ------------------------------- */
-
-function ensureColumn(table: string, column: string, definition: string) {
-  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-  if (!columns.some((entry) => entry.name === column)) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+function parseRow<T>(raw: unknown): T | undefined {
+  if (raw === null || raw === undefined || raw === "") return undefined;
+  try {
+    return JSON.parse(String(raw)) as T;
+  } catch {
+    return undefined;
   }
 }
 
-ensureColumn("payments", "screenshot_width", "INTEGER");
-ensureColumn("payments", "screenshot_height", "INTEGER");
+export async function allRows<T = Row>(table: string): Promise<T[]> {
+  const pairs = toPairs(await redis.hgetall(tableKey(table)));
+  const rows: T[] = [];
+  for (const [, value] of pairs) {
+    const row = parseRow<T>(value);
+    if (row) rows.push(row);
+  }
+  return rows;
+}
+
+export async function getRow<T = Row>(table: string, id: string | number): Promise<T | undefined> {
+  return parseRow<T>(await redis.hget(tableKey(table), String(id)));
+}
+
+export async function findRow<T = Row>(
+  table: string,
+  predicate: (row: T) => boolean
+): Promise<T | undefined> {
+  const rows = await allRows<T>(table);
+  return rows.find(predicate);
+}
+
+export async function nextId(table: string): Promise<number> {
+  return Number(await redis.incr(seqKey(table)));
+}
+
+export async function putRow(table: string, row: Row): Promise<void> {
+  await redis.hset(tableKey(table), { [String(row.id)]: JSON.stringify(row) });
+}
+
+export async function patchRow<T extends Row>(
+  table: string,
+  id: string | number,
+  patch: Partial<T>
+): Promise<T | undefined> {
+  const current = await getRow<T>(table, id);
+  if (!current) return undefined;
+  const next = { ...current, ...patch };
+  await putRow(table, next);
+  return next;
+}
+
+export async function deleteRow(table: string, id: string | number): Promise<void> {
+  await redis.hdel(tableKey(table), String(id));
+}
+
+/* --------------------------------- settings --------------------------------- */
+
+async function getSetting<T>(key: string, fallback: T): Promise<T> {
+  const raw = await redis.get(settingKey(key));
+  if (raw === null || raw === undefined || raw === "") return fallback;
+  return safeJson(String(raw), fallback);
+}
+
+async function setSetting(key: string, value: unknown): Promise<void> {
+  await redis.set(settingKey(key), JSON.stringify(value));
+}
 
 const defaultSettings: SiteSettings = {
   contact: {
@@ -182,14 +213,8 @@ const defaultSettings: SiteSettings = {
   announcement: { ar: "", en: "", enabled: false },
 };
 
-function getSetting<T>(key: string, fallback: T): T {
-  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value?: string } | undefined;
-  if (!row?.value) return fallback;
-  return safeJson(row.value, fallback);
-}
-
-export function getSettings(): SiteSettings {
-  const saved = getSetting<Partial<SiteSettings>>("site", {});
+export async function getSettings(): Promise<SiteSettings> {
+  const saved = await getSetting<Partial<SiteSettings>>("site", {});
   return {
     contact: { ...defaultSettings.contact, ...(saved.contact ?? {}) },
     payments: { ...defaultSettings.payments, ...(saved.payments ?? {}) },
@@ -198,64 +223,51 @@ export function getSettings(): SiteSettings {
   };
 }
 
-export function saveSettings(next: SiteSettings) {
-  db.prepare(
-    "INSERT INTO settings (key, value) VALUES ('site', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
-  ).run(JSON.stringify(next));
+export async function saveSettings(next: SiteSettings): Promise<void> {
+  await setSetting("site", next);
 }
 
-export function getCopyOverrides(): { ar: Record<string, string>; en: Record<string, string> } {
+export async function getCopyOverrides(): Promise<{ ar: Record<string, string>; en: Record<string, string> }> {
   return getSetting("copy", { ar: {}, en: {} });
 }
 
-export function saveCopyOverrides(next: { ar: Record<string, string>; en: Record<string, string> }) {
-  db.prepare(
-    "INSERT INTO settings (key, value) VALUES ('copy', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
-  ).run(JSON.stringify(next));
+export async function saveCopyOverrides(next: {
+  ar: Record<string, string>;
+  en: Record<string, string>;
+}): Promise<void> {
+  await setSetting("copy", next);
 }
 
-export function logAudit(
-  actor: { id?: number; name?: string } | null,
+/* ---------------------------------- audit ----------------------------------- */
+
+export async function logAudit(
+  actor: { id?: number; name?: string } | null | undefined,
   action: string,
   entity = "",
   entityId: string | number = "",
   meta: Record<string, unknown> = {}
-) {
-  db.prepare(
-    `INSERT INTO audit_log (actor_id, actor_name, action, entity, entity_id, meta, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    actor?.id ?? null,
-    actor?.name ?? "system",
+): Promise<void> {
+  const id = await nextId("audit_log");
+  await putRow("audit_log", {
+    id,
+    actor_id: actor?.id ?? null,
+    actor_name: actor?.name ?? "system",
     action,
     entity,
-    String(entityId),
-    JSON.stringify(meta),
-    nowIso()
-  );
+    entity_id: String(entityId),
+    meta: JSON.stringify(meta),
+    created_at: nowIso(),
+  });
 }
 
-export function listContent(collection: string, onlyActive = false): ContentItem[] {
-  const rows = db
-    .prepare(
-      `SELECT * FROM content_items WHERE collection = ? ${onlyActive ? "AND active = 1" : ""} ORDER BY sort ASC, id ASC`
-    )
-    .all(collection) as Record<string, unknown>[];
-
-  return rows.map((row) => ({
-    id: String(row.id),
-    collection: row.collection as ContentItem["collection"],
-    sort: Number(row.sort),
-    active: Boolean(row.active),
-    common: safeJson(row.common, {}),
-    ar: safeJson(row.ar, {}),
-    en: safeJson(row.en, {}),
-  }));
+export async function listAudit(limit = 200) {
+  const rows = await allRows<Row>("audit_log");
+  return rows.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, limit);
 }
 
-export function getContent(id: string): ContentItem | undefined {
-  const row = db.prepare("SELECT * FROM content_items WHERE id = ?").get(id) as Record<string, unknown> | undefined;
-  if (!row) return undefined;
+/* --------------------------------- content ---------------------------------- */
+
+function toContentItem(row: Row): ContentItem {
   return {
     id: String(row.id),
     collection: row.collection as ContentItem["collection"],
@@ -267,50 +279,443 @@ export function getContent(id: string): ContentItem | undefined {
   };
 }
 
-export function upsertContent(item: ContentItem) {
-  db.prepare(
-    `INSERT INTO content_items (id, collection, sort, active, common, ar, en)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET collection = excluded.collection, sort = excluded.sort,
-       active = excluded.active, common = excluded.common, ar = excluded.ar, en = excluded.en`
-  ).run(
-    item.id,
-    item.collection,
-    item.sort,
-    item.active ? 1 : 0,
-    JSON.stringify(item.common ?? {}),
-    JSON.stringify(item.ar ?? {}),
-    JSON.stringify(item.en ?? {})
-  );
+export async function listContent(collection: string, onlyActive = false): Promise<ContentItem[]> {
+  const rows = await allRows<Row>("content_items");
+  return rows
+    .filter((row) => row.collection === collection && (!onlyActive || Boolean(row.active)))
+    .sort((a, b) => Number(a.sort) - Number(b.sort) || String(a.id).localeCompare(String(b.id)))
+    .map(toContentItem);
 }
+
+export async function getContent(id: string): Promise<ContentItem | undefined> {
+  const row = await getRow<Row>("content_items", id);
+  return row ? toContentItem(row) : undefined;
+}
+
+export async function upsertContent(item: ContentItem): Promise<void> {
+  await putRow("content_items", {
+    id: item.id,
+    collection: item.collection,
+    sort: item.sort,
+    active: item.active ? 1 : 0,
+    common: JSON.stringify(item.common ?? {}),
+    ar: JSON.stringify(item.ar ?? {}),
+    en: JSON.stringify(item.en ?? {}),
+  });
+}
+
+export async function deleteContent(id: string, collection: string): Promise<void> {
+  const existing = await getContent(id);
+  if (!existing || existing.collection !== collection) return;
+  await deleteRow("content_items", id);
+}
+
+/* ---------------------------------- users ----------------------------------- */
+
+export type UserRow = {
+  id: number;
+  role: "customer" | "admin";
+  name: string;
+  email: string;
+  phone: string;
+  password_salt: string;
+  password_hash: string;
+  blocked: number;
+  created_at: string;
+};
+
+export async function findUserById(id: number): Promise<UserRow | undefined> {
+  return getRow<UserRow>("users", id);
+}
+
+export async function findUserByEmail(email: string): Promise<UserRow | undefined> {
+  const rows = await allRows<UserRow>("users");
+  return rows.find((row) => row.email === email);
+}
+
+export async function findAdmin(): Promise<UserRow | undefined> {
+  const rows = await allRows<UserRow>("users");
+  return rows.find((row) => row.role === "admin");
+}
+
+export async function createUser(input: {
+  role: "customer" | "admin";
+  name: string;
+  email: string;
+  phone: string;
+  password_salt: string;
+  password_hash: string;
+}): Promise<UserRow> {
+  const id = await nextId("users");
+  const row: UserRow = { ...input, id, blocked: 0, created_at: nowIso() };
+  await putRow("users", row);
+  return row;
+}
+
+export async function updateUser(id: number, patch: Partial<UserRow>): Promise<UserRow | undefined> {
+  return patchRow<UserRow>("users", id, patch);
+}
+
+export async function listCustomerRows(): Promise<UserRow[]> {
+  const rows = await allRows<UserRow>("users");
+  return rows.filter((row) => row.role === "customer");
+}
+
+export type CustomerSummary = {
+  id: number;
+  activeSubscriptions: number;
+  spent: number;
+  endsAt: string | null;
+};
+
+/** Per-customer rollups, computed in JS now that the tables are Redis hashes. */
+export async function customerSummaries(now: string): Promise<Map<number, CustomerSummary>> {
+  const [subs, payments] = await Promise.all([allRows<Row>("subscriptions"), allRows<Row>("payments")]);
+  const out = new Map<number, CustomerSummary>();
+
+  for (const sub of subs) {
+    if (sub.status !== "active" || String(sub.ends_at) <= now) continue;
+    const entry =
+      out.get(Number(sub.user_id)) ??
+      ({ id: Number(sub.user_id), activeSubscriptions: 0, spent: 0, endsAt: null } as CustomerSummary);
+    entry.activeSubscriptions += 1;
+    if (!entry.endsAt || String(sub.ends_at) > entry.endsAt) entry.endsAt = String(sub.ends_at);
+    out.set(entry.id, entry);
+  }
+
+  for (const payment of payments) {
+    if (!["approved", "auto_approved"].includes(String(payment.status))) continue;
+    const userId = Number(payment.user_id);
+    const entry =
+      out.get(userId) ?? ({ id: userId, activeSubscriptions: 0, spent: 0, endsAt: null } as CustomerSummary);
+    entry.spent += Number(payment.amount ?? 0);
+    out.set(userId, entry);
+  }
+
+  return out;
+}
+
+/* ------------------------------- subscriptions ------------------------------ */
+
+export type SubscriptionRow = {
+  id: number;
+  user_id: number;
+  program_id: string;
+  program_name: string;
+  payment_id: number | null;
+  starts_at: string;
+  ends_at: string;
+  status: string;
+  created_at: string;
+};
+
+export async function listSubscriptionsByUser(userId: number): Promise<SubscriptionRow[]> {
+  const rows = await allRows<SubscriptionRow>("subscriptions");
+  return rows
+    .filter((row) => Number(row.user_id) === userId)
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+}
+
+export async function findActiveSubscription(
+  userId: number,
+  programId: string,
+  now: string
+): Promise<SubscriptionRow | undefined> {
+  const rows = await allRows<SubscriptionRow>("subscriptions");
+  return rows
+    .filter(
+      (row) =>
+        Number(row.user_id) === userId &&
+        row.program_id === programId &&
+        row.status === "active" &&
+        String(row.ends_at) > now
+    )
+    .sort((a, b) => String(b.ends_at).localeCompare(String(a.ends_at)))[0];
+}
+
+export async function updateSubscriptionEnds(id: number, endsAt: string): Promise<void> {
+  await patchRow("subscriptions", id, { ends_at: endsAt });
+}
+
+export async function createSubscription(input: {
+  user_id: number;
+  program_id: string;
+  program_name: string;
+  payment_id: number | null;
+  starts_at: string;
+  ends_at: string;
+}): Promise<number> {
+  const id = await nextId("subscriptions");
+  await putRow("subscriptions", { ...input, id, status: "active", created_at: nowIso() });
+  return id;
+}
+
+export async function expireOldSubscriptions(now: string): Promise<void> {
+  const rows = await allRows<SubscriptionRow>("subscriptions");
+  for (const row of rows) {
+    if (row.status === "active" && String(row.ends_at) <= now) {
+      await patchRow("subscriptions", row.id, { status: "expired" });
+    }
+  }
+}
+
+export async function findSubscriptionByPayment(paymentId: number): Promise<SubscriptionRow | undefined> {
+  const rows = await allRows<SubscriptionRow>("subscriptions");
+  return rows.find((row) => Number(row.payment_id) === paymentId);
+}
+
+export async function setSubscriptionStatus(id: number, status: string): Promise<void> {
+  await patchRow("subscriptions", id, { status });
+}
+
+export async function allSubscriptions(): Promise<SubscriptionRow[]> {
+  const rows = await allRows<SubscriptionRow>("subscriptions");
+  return rows.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+}
+
+export async function countActiveSubscriptions(now: string): Promise<number> {
+  const rows = await allRows<SubscriptionRow>("subscriptions");
+  return rows.filter((row) => row.status === "active" && String(row.ends_at) > now).length;
+}
+
+export async function countExpiringSoon(now: string, horizon: string): Promise<number> {
+  const rows = await allRows<SubscriptionRow>("subscriptions");
+  return rows.filter(
+    (row) => row.status === "active" && String(row.ends_at) > now && String(row.ends_at) <= horizon
+  ).length;
+}
+
+/* --------------------------------- payments --------------------------------- */
+
+export type PaymentRow = {
+  id: number;
+  user_id: number;
+  program_id: string;
+  program_name: string;
+  amount: number;
+  days: number;
+  method: string;
+  sender: string;
+  reference: string;
+  screenshot: string;
+  screenshot_sha: string;
+  reference_key: string;
+  status: string;
+  risk: string;
+  note: string;
+  created_at: string;
+  reviewed_at: string | null;
+  screenshot_width?: number | null;
+  screenshot_height?: number | null;
+};
+
+export async function listPaymentsByUser(userId: number): Promise<PaymentRow[]> {
+  const rows = await allRows<PaymentRow>("payments");
+  return rows
+    .filter((row) => Number(row.user_id) === userId)
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+}
+
+export async function getPayment(id: number): Promise<PaymentRow | undefined> {
+  return getRow<PaymentRow>("payments", id);
+}
+
+export async function findPaymentBySha(sha: string): Promise<PaymentRow | undefined> {
+  const rows = await allRows<PaymentRow>("payments");
+  return rows.find((row) => row.screenshot_sha === sha);
+}
+
+export async function findPaymentByReferenceKey(key: string): Promise<PaymentRow | undefined> {
+  const rows = await allRows<PaymentRow>("payments");
+  return rows.find((row) => row.reference_key === key);
+}
+
+export async function createPayment(input: Omit<PaymentRow, "id">): Promise<number> {
+  const id = await nextId("payments");
+  await putRow("payments", { ...input, id });
+  return id;
+}
+
+export async function updatePayment(
+  id: number,
+  patch: Partial<PaymentRow>
+): Promise<PaymentRow | undefined> {
+  return patchRow<PaymentRow>("payments", id, patch);
+}
+
+export async function allPayments(): Promise<PaymentRow[]> {
+  const rows = await allRows<PaymentRow>("payments");
+  return rows.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+}
+
+const APPROVED = ["approved", "auto_approved"];
+
+export async function paymentStats() {
+  const rows = await allRows<PaymentRow>("payments");
+  const today = nowIso().slice(0, 10);
+  const month = today.slice(0, 7);
+
+  const approved = rows.filter((row) => APPROVED.includes(String(row.status)));
+  const sum = (list: PaymentRow[]) => list.reduce((total, row) => total + Number(row.amount ?? 0), 0);
+
+  const monthly: { month: string; total: number }[] = [];
+  for (let i = 5; i >= 0; i -= 1) {
+    const date = new Date();
+    date.setDate(1);
+    date.setMonth(date.getMonth() - i);
+    const key = date.toISOString().slice(0, 7);
+    monthly.push({ month: key, total: sum(approved.filter((row) => String(row.created_at).slice(0, 7) === key)) });
+  }
+
+  return {
+    revenue: sum(approved),
+    todayRevenue: sum(approved.filter((row) => String(row.created_at).slice(0, 10) === today)),
+    monthRevenue: sum(approved.filter((row) => String(row.created_at).slice(0, 7) === month)),
+    pendingCount: rows.filter((row) => row.status === "pending").length,
+    pendingAmount: sum(rows.filter((row) => row.status === "pending")),
+    approved: rows.filter((row) => row.status === "approved").length,
+    auto: rows.filter((row) => row.status === "auto_approved").length,
+    rejected: rows.filter((row) => row.status === "rejected").length,
+    monthly,
+  };
+}
+
+/* --------------------------------- messages --------------------------------- */
+
+export type MessageRow = {
+  id: number;
+  name: string;
+  phone: string;
+  email: string;
+  goal: string;
+  body: string;
+  read: number;
+  created_at: string;
+};
+
+export async function createMessage(input: {
+  name: string;
+  phone: string;
+  email: string;
+  goal: string;
+  body: string;
+}): Promise<void> {
+  const id = await nextId("messages");
+  await putRow("messages", { ...input, id, read: 0, created_at: nowIso() });
+}
+
+export async function listMessages(limit = 500): Promise<MessageRow[]> {
+  const rows = await allRows<MessageRow>("messages");
+  return rows.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, limit);
+}
+
+export async function setMessageRead(id: number, read: boolean): Promise<void> {
+  await patchRow("messages", id, { read: read ? 1 : 0 });
+}
+
+export async function deleteMessage(id: number): Promise<void> {
+  await deleteRow("messages", id);
+}
+
+export async function countUnreadMessages(): Promise<number> {
+  const rows = await allRows<MessageRow>("messages");
+  return rows.filter((row) => !row.read).length;
+}
+
+/* ---------------------------------- media ----------------------------------- */
+
+export type MediaRow = {
+  id: number;
+  url: string;
+  filename: string;
+  mime: string;
+  size: number;
+  created_at: string;
+};
+
+export async function createMedia(input: Omit<MediaRow, "id">): Promise<number> {
+  const id = await nextId("media");
+  await putRow("media", { ...input, id });
+  return id;
+}
+
+export async function listMedia(limit = 200): Promise<MediaRow[]> {
+  const rows = await allRows<MediaRow>("media");
+  return rows.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, limit);
+}
+
+export async function getMedia(id: number): Promise<MediaRow | undefined> {
+  return getRow<MediaRow>("media", id);
+}
+
+export async function deleteMedia(id: number): Promise<void> {
+  await deleteRow("media", id);
+}
+
+/* --------------------------------- file store -------------------------------- */
+
+type StoredFile = { mime: string; data: string };
+
+/**
+ * Binary payloads (payment screenshots, media-library images) are base64 JSON
+ * blobs in Redis. Upstash caps a value at 10 MB, so uploads are limited to
+ * 6 MB on the wire (8 MB once base64-encoded) — see MAX_UPLOAD_BYTES.
+ */
+export const MAX_UPLOAD_BYTES = 6 * 1024 * 1024;
+
+export async function putFile(name: string, buffer: Buffer, mime: string): Promise<void> {
+  const payload: StoredFile = { mime, data: buffer.toString("base64") };
+  if (JSON.stringify(payload).length > 9_500_000) {
+    throw new Error("FILE_TOO_LARGE");
+  }
+  await redis.set(fileKey(name), JSON.stringify(payload));
+}
+
+export async function getFile(name: string): Promise<{ mime: string; buffer: Buffer } | undefined> {
+  const raw = await redis.get(fileKey(name));
+  if (!raw) return undefined;
+  const parsed = safeJson<StoredFile | null>(String(raw), null);
+  if (!parsed?.data) return undefined;
+  return { mime: parsed.mime || "application/octet-stream", buffer: Buffer.from(parsed.data, "base64") };
+}
+
+export async function deleteFile(name: string): Promise<void> {
+  await redis.del(fileKey(name));
+}
+
+/* ----------------------------------- seed ----------------------------------- */
 
 const seedPassword = process.env.ADMIN_PASSWORD || "Mostafa@2026!";
 const seedEmail = (process.env.ADMIN_EMAIL || "admin@drmostafayoussef.com").toLowerCase();
-
-function seedAdmin() {
-  const existing = db.prepare("SELECT id FROM users WHERE role = 'admin' LIMIT 1").get();
-  if (existing) return;
-  const { salt, hash } = hashPassword(seedPassword);
-  db.prepare(
-    `INSERT INTO users (role, name, email, phone, password_salt, password_hash, created_at)
-     VALUES ('admin', ?, ?, ?, ?, ?, ?)`
-  ).run("د. مصطفى يوسف", seedEmail, "01004334487", salt, hash, nowIso());
-}
 
 function parseAmount(value: string) {
   const digits = value.replace(/[^\d]/g, "");
   return Number.parseInt(digits || "0", 10);
 }
 
-function seedContent() {
-  const count = db.prepare("SELECT COUNT(*) AS total FROM content_items").get() as { total: number };
-  if (Number(count.total) > 0) return;
+async function seedAdmin() {
+  if (await findAdmin()) return;
+  const { salt, hash } = hashPassword(seedPassword);
+  await createUser({
+    role: "admin",
+    name: "د. مصطفى يوسف",
+    email: seedEmail,
+    phone: "01004334487",
+    password_salt: salt,
+    password_hash: hash,
+  });
+}
+
+async function seedContent() {
+  if ((await allRows("content_items")).length > 0) return;
 
   const programImages = [images.gym, images.hero, images.dumbbells];
 
-  ar.programs.forEach((program, index) => {
+  const add = (item: ContentItem) => upsertContent(item);
+
+  for (const [index, program] of ar.programs.entries()) {
     const other = en.programs[index];
-    upsertContent({
+    await add({
       id: `prog-${program.id}`,
       collection: "programs",
       sort: index,
@@ -329,11 +734,11 @@ function seedContent() {
         note: other?.note ?? program.note,
       },
     });
-  });
+  }
 
-  ar.services.forEach((service, index) => {
+  for (const [index, service] of ar.services.entries()) {
     const other = en.services[index];
-    upsertContent({
+    await add({
       id: `svc-${index + 1}`,
       collection: "services",
       sort: index,
@@ -347,11 +752,11 @@ function seedContent() {
         bullets: other?.bullets ?? service.bullets,
       },
     });
-  });
+  }
 
-  ar.testimonials.forEach((item, index) => {
+  for (const [index, item] of ar.testimonials.entries()) {
     const other = en.testimonials[index];
-    upsertContent({
+    await add({
       id: `tst-${index + 1}`,
       collection: "testimonials",
       sort: index,
@@ -365,11 +770,11 @@ function seedContent() {
         result: other?.result ?? item.result,
       },
     });
-  });
+  }
 
-  ar.results.forEach((item, index) => {
+  for (const [index, item] of ar.results.entries()) {
     const other = en.results[index];
-    upsertContent({
+    await add({
       id: `res-${index + 1}`,
       collection: "results",
       sort: index,
@@ -383,21 +788,16 @@ function seedContent() {
         summary: other?.summary ?? item.summary,
       },
     });
-  });
+  }
 
-  ar.posts.forEach((post, index) => {
+  for (const [index, post] of ar.posts.entries()) {
     const other = en.posts.find((entry) => entry.slug === post.slug);
-    upsertContent({
+    await add({
       id: `post-${post.slug}`,
       collection: "posts",
       sort: index,
       active: true,
-      common: {
-        slug: post.slug,
-        date: post.date,
-        readTime: post.readTime,
-        cover: post.cover,
-      },
+      common: { slug: post.slug, date: post.date, readTime: post.readTime, cover: post.cover },
       ar: { title: post.title, excerpt: post.excerpt, category: post.category, body: post.body },
       en: {
         title: other?.title ?? post.title,
@@ -406,11 +806,11 @@ function seedContent() {
         body: other?.body ?? post.body,
       },
     });
-  });
+  }
 
-  ar.faq.items.forEach((item, index) => {
+  for (const [index, item] of ar.faq.items.entries()) {
     const other = en.faq.items[index];
-    upsertContent({
+    await add({
       id: `faq-${index + 1}`,
       collection: "faqs",
       sort: index,
@@ -419,11 +819,11 @@ function seedContent() {
       ar: { q: item.q, a: item.a },
       en: { q: other?.q ?? item.q, a: other?.a ?? item.a },
     });
-  });
+  }
 
-  ar.about.creds.forEach((item, index) => {
+  for (const [index, item] of ar.about.creds.entries()) {
     const other = en.about.creds[index];
-    upsertContent({
+    await add({
       id: `cred-${index + 1}`,
       collection: "credentials",
       sort: index,
@@ -436,12 +836,16 @@ function seedContent() {
         place: other?.place ?? item.place,
       },
     });
-  });
+  }
 }
 
-seedAdmin();
-seedContent();
-
-if (!db.prepare("SELECT key FROM settings WHERE key = 'site'").get()) {
-  saveSettings(defaultSettings);
+async function seed() {
+  await seedAdmin();
+  await seedContent();
+  if (!(await getSetting<SiteSettings | null>("site", null))) {
+    await saveSettings(defaultSettings);
+  }
 }
+
+/** Runs once per cold start; idempotent, so concurrent instances are safe. */
+await seed();

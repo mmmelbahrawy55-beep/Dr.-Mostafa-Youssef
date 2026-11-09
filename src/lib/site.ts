@@ -8,14 +8,14 @@ export const site = {
   youtube: "https://www.youtube.com/",
   tiktok: "https://www.tiktok.com/",
   address: {
-    ar: "القاهرة، مصر — العيادة الرئيسية",
-    en: "Cairo, Egypt — Main clinic",
+    ar: "الزقازيق، مصر — العيادة الرئيسية",
+    en: "Zagazig, Egypt — Main clinic",
   },
   hours: {
     ar: "السبت – الخميس: ١٠ صباحًا – ٩ مساءً",
     en: "Saturday – Thursday: 10 AM – 9 PM",
   },
-  mapEmbed: "https://maps.google.com/maps?q=Cairo%2C%20Egypt&z=12&output=embed",
+  mapEmbed: "https://maps.google.com/maps?q=Zagazig%2C%20Egypt&z=12&output=embed",
   locale: { ar: "ar-EG", en: "en-US" },
 } as const;
 

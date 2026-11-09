@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { Route, Routes, useLocation } from "react-router-dom";
 import { Layout } from "./components/layout/Layout";
 import { ToastProvider } from "./components/ui/Toast";
-import { AuthProvider, RequireAdmin, RequireAuth } from "./lib/auth";
+import { AuthProvider, RequireAuth } from "./lib/auth";
 import { LanguageProvider } from "./lib/i18n";
 import { SiteDataProvider } from "./lib/site-data";
 import About from "./pages/About";
@@ -19,7 +19,7 @@ import Programs from "./pages/Programs";
 import Results from "./pages/Results";
 import Services from "./pages/Services";
 import Subscribe from "./pages/Subscribe";
-import AdminLayout from "./pages/admin/AdminLayout";
+import AdminGate from "./pages/admin/AdminGate";
 import AdminAudit from "./pages/admin/Audit";
 import AdminContent from "./pages/admin/Content";
 import AdminCopy from "./pages/admin/Copy";
@@ -76,14 +76,7 @@ export default function App() {
                 <Route path="*" element={<NotFound />} />
               </Route>
 
-              <Route
-                path="admin"
-                element={
-                  <RequireAdmin>
-                    <AdminLayout />
-                  </RequireAdmin>
-                }
-              >
+              <Route path="admin" element={<AdminGate />}>
                 <Route index element={<AdminOverview />} />
                 <Route path="payments" element={<AdminPayments />} />
                 <Route path="customers" element={<AdminCustomers />} />

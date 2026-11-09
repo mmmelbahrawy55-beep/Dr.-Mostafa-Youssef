@@ -136,7 +136,7 @@ export const en: Dict = {
     ],
     credsTitle: "Specialisation & credentials",
     creds: [
-      { year: "2014", title: "BSc in Health Sciences & Nutrition", place: "Cairo University" },
+      { year: "2014", title: "BSc in Health Sciences & Nutrition", place: "Zagazig University" },
       { year: "2016", title: "Diploma in Clinical Nutrition", place: "Faculty of Medicine" },
       { year: "2018", title: "Certified Personal Trainer", place: "NASM — equivalent" },
       { year: "2021", title: "Sports Nutrition Specialisation", place: "Accredited international program" },
@@ -360,7 +360,7 @@ export const en: Dict = {
   testimonials: [
     {
       name: "Mohamed A.",
-      role: "Engineer — Cairo",
+      role: "Engineer — Zagazig",
       quote:
         "First time I've stuck with a program past two months. The weekly check-ins keep you going, and the food is normal — no starvation.",
       rating: 5,
@@ -454,7 +454,7 @@ export const en: Dict = {
     items: [
       {
         q: "Is the program online or in clinic?",
-        a: "Both are available. Online runs through WhatsApp and video calls; in Cairo we meet at the clinic. The content and follow-up are identical.",
+        a: "Both are available. Online runs through WhatsApp and video calls; in Zagazig we meet at the clinic. The content and follow-up are identical.",
       },
       {
         q: "Do I need lab tests before we start?",

@@ -37,6 +37,7 @@ import {
   getMedia,
   getFile,
   getPayment,
+  getRow,
   getSettings,
   rateCount,
   redis,
@@ -1119,8 +1120,12 @@ app.delete(
   requireAdmin,
   asyncRoute(async (req, res) => {
     const deletedId = int(req.params.id);
+    const message = await getRow("messages", deletedId);
     await deleteMessage(deletedId);
-    await logAudit(req.user, "message.delete", "message", deletedId);
+    await logAudit(req.user, "message.delete", "message", deletedId, {
+      name: message?.name ?? "",
+      email: message?.email ?? "",
+    });
     res.json({ ok: true });
   })
 );
@@ -1400,7 +1405,7 @@ app.delete(
     if (!row) return void res.status(404).json({ error: "الصورة غير موجودة." });
     await deleteMedia(id);
     await deleteFile(path.basename(row.filename)).catch(() => undefined);
-    await logAudit(req.user, "media.delete", "media", id);
+    await logAudit(req.user, "media.delete", "media", id, { url: row.url, filename: row.filename });
     res.json({ ok: true });
   })
 );

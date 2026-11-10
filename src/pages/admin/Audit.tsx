@@ -158,7 +158,10 @@ export default function AdminAudit() {
       case "subscription.status":
         return meta.status ? `الحالة: ${STATUSES[String(meta.status)] ?? String(meta.status)}` : "—";
       case "media.upload":
+      case "media.delete":
         return meta.url ? String(meta.url) : "—";
+      case "message.delete":
+        return [meta.name, meta.email].filter(Boolean).join(" · ") || "—";
       case "content.create":
       case "content.update":
       case "content.delete":
@@ -169,8 +172,6 @@ export default function AdminAudit() {
         return `عدد الصفوف: ${entry.entityId}`;
       case "settings.update":
       case "copy.update":
-      case "message.delete":
-      case "media.delete":
         return "—";
       default:
         return metaSummary(meta);

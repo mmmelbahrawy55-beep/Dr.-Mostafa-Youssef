@@ -134,7 +134,7 @@ export function Header() {
               <Link
                 to={accountHref}
                 className="group flex items-center gap-2 rounded-full border border-white/15 py-1.5 pe-3 ps-1.5 text-[11px] font-bold text-cream/80 transition-colors hover:border-lemon/50 hover:text-lemon"
-                title={user.role === "admin" ? "لوحة التحكم" : "حسابي"}
+                title={user.role === "admin" ? t.ui.dashboard : t.ui.myAccount}
               >
                 <span className="flex size-7 items-center justify-center rounded-full bg-lemon text-ink">
                   {user.role === "admin" ? <LayoutDashboard className="size-3.5" aria-hidden /> : <UserRound className="size-3.5" aria-hidden />}
@@ -147,12 +147,12 @@ export function Header() {
                 className="flex items-center gap-1.5 rounded-full border border-white/15 px-3 py-2 text-[11px] font-bold text-cream/80 transition-colors hover:border-lemon/50 hover:text-lemon"
               >
                 <LogIn className="size-3.5" aria-hidden />
-                <span className="hidden sm:inline">دخول</span>
+                <span className="hidden sm:inline">{t.ui.signInShort}</span>
               </Link>
             )}
 
             <CTA to={navPaths.programs} size="sm" className="hidden xl:inline-flex" icon={false}>
-              اشترك الآن
+              {t.ui.subscribeNow}
             </CTA>
 
             <button
@@ -189,7 +189,7 @@ export function Header() {
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-display text-sm font-bold text-cream">{user.name}</span>
                     <span className="mt-0.5 block text-[11px] text-lemon">
-                      {user.role === "admin" ? "افتح لوحة التحكم" : "ادخل لحسابك وباقتك"}
+                      {user.role === "admin" ? t.ui.dashboard : t.ui.accountAndPlan}
                     </span>
                   </span>
                   <ArrowUpRight className="size-4 text-lemon" aria-hidden />
@@ -198,10 +198,10 @@ export function Header() {
                 <div className="grid grid-cols-2 gap-2">
                   <Link to="/login" className="flex items-center justify-center gap-2 rounded-2xl bg-lemon px-4 py-3 text-sm font-bold text-ink">
                     <LogIn className="size-4" aria-hidden />
-                    تسجيل الدخول
+                    {t.ui.signIn}
                   </Link>
                   <Link to="/register" className="flex items-center justify-center gap-2 rounded-2xl border border-white/15 px-4 py-3 text-sm font-bold text-cream">
-                    حساب جديد
+                    {t.ui.signUp}
                   </Link>
                 </div>
               )}
@@ -233,7 +233,7 @@ export function Header() {
 
               <div className="mt-8 flex flex-col gap-3">
                 <CTA to={navPaths.programs} size="lg">
-                  اشترك في باقة
+                  {t.ui.subscribePlan}
                 </CTA>
                 <CTA
                   href={whatsappLink(t.ui.whatsapp)}
@@ -262,7 +262,7 @@ export function Header() {
                 <p>{t.contact.info.hours}: {info.hours[lang]}</p>
                 <p className="flex items-center gap-1.5 text-[11px] text-cream/35">
                   <ShieldCheck className="size-3.5 text-lemon/60" aria-hidden />
-                  دفع آمن عبر فودافون كاش أو إنستاباي
+                  {t.ui.securePayment}
                 </p>
               </div>
             </div>

@@ -24,6 +24,17 @@ export const en: Dict = {
     languageLabel: "العربية",
     menu: "Menu",
     close: "Close",
+    signIn: "Sign in",
+    signInShort: "Sign in",
+    signUp: "Create account",
+    subscribeNow: "Subscribe now",
+    subscribePlan: "Choose a plan",
+    dashboard: "Dashboard",
+    myAccount: "My account",
+    accountAndPlan: "My account & plan",
+    securePayment: "Secure payment via Vodafone Cash or InstaPay",
+    accountSection: "Account",
+    subscriptionAndPayment: "Plans & payment",
   },
 
   hero: {

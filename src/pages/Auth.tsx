@@ -18,6 +18,8 @@ import { Spinner } from "../components/ui/Spinner";
 import { useToast } from "../components/ui/Toast";
 import { useAuth } from "../lib/auth";
 import { images } from "../lib/images";
+import { useLang } from "../lib/i18n";
+import { localize } from "../lib/localize";
 import { cn } from "../lib/utils";
 
 type Mode = "login" | "register";
@@ -38,6 +40,7 @@ function PasswordInput({
   autoComplete?: string;
 }) {
   const [visible, setVisible] = useState(false);
+  const { lang } = useLang();
   return (
     <div className="relative">
       <input
@@ -54,7 +57,7 @@ function PasswordInput({
         type="button"
         onClick={() => setVisible((prev) => !prev)}
         className="absolute end-3 top-1/2 -translate-y-1/2 text-cream/35 transition-colors hover:text-lemon"
-        aria-label={visible ? "إخفاء الباسورد" : "إظهار الباسورد"}
+        aria-label={lang === "ar" ? (visible ? "إخفاء الباسورد" : "إظهار الباسورد") : visible ? "Hide password" : "Show password"}
       >
         {visible ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
       </button>
@@ -65,6 +68,8 @@ function PasswordInput({
 export default function Auth({ mode }: { mode: Mode }) {
   const isRegister = mode === "register";
   const { user, login, register } = useAuth();
+  const { lang } = useLang();
+  const ar = lang === "ar";
   const toast = useToast();
   const navigate = useNavigate();
   const [params] = useSearchParams();
@@ -96,12 +101,13 @@ export default function Auth({ mode }: { mode: Mode }) {
     setError("");
 
     if (isRegister) {
-      if (name.trim().length < 2) return setError("اكتب اسمك بالكامل.");
-      if (!/^01[0125]\d{8}$/.test(phone.trim())) return setError("اكتب رقم موبايل مصري صحيح (01xxxxxxxxx).");
-      if (password.length < 8) return setError("الباسورد لازم 8 حروف على الأقل.");
-      if (password !== confirm) return setError("الباسورد وتأكيده مش متطابقين.");
+      if (name.trim().length < 2) return setError(ar ? "اكتب اسمك بالكامل." : "Enter your full name.");
+      if (!/^01[0125]\d{8}$/.test(phone.trim()))
+        return setError(ar ? "اكتب رقم موبايل مصري صحيح (01xxxxxxxxx)." : "Enter a valid Egyptian mobile number (01xxxxxxxxx).");
+      if (password.length < 8) return setError(ar ? "الباسورد لازم 8 حروف على الأقل." : "Password must be at least 8 characters.");
+      if (password !== confirm) return setError(ar ? "الباسورد وتأكيده مش متطابقين." : "Passwords don't match.");
     } else if (!email.trim() || !password) {
-      return setError("اكتب الإيميل والباسورد.");
+      return setError(ar ? "اكتب الإيميل والباسورد." : "Enter your email and password.");
     }
 
     setBusy(true);
@@ -109,10 +115,24 @@ export default function Auth({ mode }: { mode: Mode }) {
       const account = isRegister
         ? await register({ name: name.trim(), email: email.trim(), phone: phone.trim(), password })
         : await login(email.trim(), password);
-      toast.success(isRegister ? "حسابك اتعمل بنجاح، أهلاً بيك!" : "أهلاً بيك تاني 👋");
+      toast.success(
+        isRegister
+          ? ar
+            ? "حسابك اتعمل بنجاح، أهلاً بيك!"
+            : "Account created — welcome aboard!"
+          : ar
+            ? "أهلاً بيك تاني 👋"
+            : "Welcome back 👋"
+      );
       navigate(account.role === "admin" ? "/admin" : next || "/account", { replace: true });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "حصل خطأ. جرب تاني.");
+      setError(
+        cause instanceof Error
+          ? localize(cause.message, lang)
+          : ar
+            ? "حصل خطأ. جرب تاني."
+            : "Something went wrong. Try again."
+      );
     } finally {
       setBusy(false);
     }
@@ -131,12 +151,22 @@ export default function Auth({ mode }: { mode: Mode }) {
             <div className="mt-10">
               <LogoBadge />
               <h1 className="mt-5 text-3xl leading-tight md:text-4xl">
-                {isRegister ? "اعمل حسابك وابدأ تحوّلك." : "أهلاً بيك تاني."}
+                {isRegister
+                  ? ar
+                    ? "اعمل حسابك وابدأ تحوّلك."
+                    : "Create your account. Start your transformation."
+                  : ar
+                    ? "أهلاً بيك تاني."
+                    : "Welcome back."}
               </h1>
               <p className="mt-3 text-sm leading-relaxed text-cream/55">
                 {isRegister
-                  ? "حساب واحد تتابع بيه باقتك، دفعاتك، وخطتك — في مكان واحد آمن."
-                  : "سجل دخولك عشان تشوف باقتك وتدفع وتتابع كل حاجة."}
+                  ? ar
+                    ? "حساب واحد تتابع بيه باقتك، دفعاتك، وخطتك — في مكان واحد آمن."
+                    : "One account to follow your plan, payments and program — in one secure place."
+                  : ar
+                    ? "سجل دخولك عشان تشوف باقتك وتدفع وتتابع كل حاجة."
+                    : "Sign in to see your plan, pay, and track everything."}
               </p>
             </div>
 
@@ -144,7 +174,7 @@ export default function Auth({ mode }: { mode: Mode }) {
               {isRegister && (
                 <div>
                   <label htmlFor="auth-name" className="mb-1.5 block text-xs font-semibold text-cream/60">
-                    الاسم الكامل
+                    {ar ? "الاسم الكامل" : "Full name"}
                   </label>
                   <div className="relative">
                     <UserRound className="pointer-events-none absolute start-3 top-1/2 size-4 -translate-y-1/2 text-cream/30" aria-hidden />
@@ -153,7 +183,7 @@ export default function Auth({ mode }: { mode: Mode }) {
                       className="field ps-10"
                       value={name}
                       onChange={(event) => setName(event.target.value)}
-                      placeholder="اسمك زي ما تحب نناديك"
+                      placeholder={ar ? "اسمك زي ما تحب نناديك" : "What should we call you?"}
                       autoComplete="name"
                       required
                     />
@@ -163,7 +193,7 @@ export default function Auth({ mode }: { mode: Mode }) {
 
               <div>
                 <label htmlFor="auth-email" className="mb-1.5 block text-xs font-semibold text-cream/60">
-                  الإيميل
+                  {ar ? "الإيميل" : "Email"}
                 </label>
                 <div className="relative">
                   <Mail className="pointer-events-none absolute start-3 top-1/2 size-4 -translate-y-1/2 text-cream/30" aria-hidden />
@@ -184,7 +214,7 @@ export default function Auth({ mode }: { mode: Mode }) {
               {isRegister && (
                 <div>
                   <label htmlFor="auth-phone" className="mb-1.5 block text-xs font-semibold text-cream/60">
-                    رقم الموبايل
+                    {ar ? "رقم الموبايل" : "Mobile number"}
                   </label>
                   <div className="relative">
                     <Phone className="pointer-events-none absolute start-3 top-1/2 size-4 -translate-y-1/2 text-cream/30" aria-hidden />
@@ -205,13 +235,13 @@ export default function Auth({ mode }: { mode: Mode }) {
 
               <div>
                 <label htmlFor="auth-password" className="mb-1.5 block text-xs font-semibold text-cream/60">
-                  الباسورد
+                  {ar ? "الباسورد" : "Password"}
                 </label>
                 <PasswordInput
                   id="auth-password"
                   value={password}
                   onChange={setPassword}
-                  placeholder="8 حروف على الأقل"
+                  placeholder={ar ? "8 حروف على الأقل" : "At least 8 characters"}
                   autoComplete={isRegister ? "new-password" : "current-password"}
                 />
                 {isRegister && password.length > 0 && (
@@ -228,7 +258,7 @@ export default function Auth({ mode }: { mode: Mode }) {
                       ))}
                     </div>
                     <span className="text-[10px] text-cream/40">
-                      {strength >= 3 ? "قوي" : strength >= 2 ? "متوسط" : "ضعيف"}
+                      {strength >= 3 ? (ar ? "قوي" : "Strong") : strength >= 2 ? (ar ? "متوسط" : "Medium") : ar ? "ضعيف" : "Weak"}
                     </span>
                   </div>
                 )}
@@ -237,7 +267,7 @@ export default function Auth({ mode }: { mode: Mode }) {
               {isRegister && (
                 <div>
                   <label htmlFor="auth-confirm" className="mb-1.5 block text-xs font-semibold text-cream/60">
-                    تأكيد الباسورد
+                    {ar ? "تأكيد الباسورد" : "Confirm password"}
                   </label>
                   <PasswordInput id="auth-confirm" value={confirm} onChange={setConfirm} autoComplete="new-password" />
                 </div>
@@ -255,35 +285,69 @@ export default function Auth({ mode }: { mode: Mode }) {
                 className="shine inline-flex w-full items-center justify-center gap-2 rounded-full bg-lemon px-6 py-4 text-sm font-bold text-ink transition-all hover:-translate-y-0.5 hover:shadow-[0_18px_45px_-14px_rgba(212,255,63,0.65)] disabled:translate-y-0 disabled:opacity-60"
               >
                 {busy ? <Spinner className="text-ink" /> : <Sparkles className="size-4" aria-hidden />}
-                {busy ? "لحظة…" : isRegister ? "إنشاء الحساب" : "تسجيل الدخول"}
+                {busy
+                  ? ar
+                    ? "لحظة…"
+                    : "One moment…"
+                  : isRegister
+                    ? ar
+                      ? "إنشاء الحساب"
+                      : "Create account"
+                    : ar
+                      ? "تسجيل الدخول"
+                      : "Sign in"}
               </button>
             </form>
 
             <p className="mt-6 text-center text-sm text-cream/50">
-              {isRegister ? "عندك حساب بالفعل؟" : "معندكش حساب؟"}{" "}
-              <Link to={isRegister ? `/login${next ? `?next=${encodeURIComponent(next)}` : ""}` : `/register${next ? `?next=${encodeURIComponent(next)}` : ""}`} className="font-bold text-lemon hover:underline">
-                {isRegister ? "سجل دخول" : "اعمل حساب جديد"}
+              {isRegister
+                ? ar
+                  ? "عندك حساب بالفعل؟"
+                  : "Already have an account?"
+                : ar
+                  ? "معندكش حساب؟"
+                  : "Don't have an account?"}{" "}
+              <Link
+                to={isRegister ? `/login${next ? `?next=${encodeURIComponent(next)}` : ""}` : `/register${next ? `?next=${encodeURIComponent(next)}` : ""}`}
+                className="font-bold text-lemon hover:underline"
+              >
+                {isRegister
+                  ? ar
+                    ? "سجل دخول"
+                    : "Sign in"
+                  : ar
+                    ? "اعمل حساب جديد"
+                    : "Create account"}
               </Link>
             </p>
 
             <div className="mt-8 flex items-center justify-center gap-2 text-[11px] text-cream/30">
               <ShieldCheck className="size-3.5 text-lemon/60" aria-hidden />
-              بياناتك مشفرة، والباسورد مش بيتخزن كنص.
+              {ar ? "بياناتك مشفرة، والباسورد مش بيتخزن كنص." : "Your data is encrypted — passwords are never stored in plain text."}
             </div>
 
             <Link to="/" className="mt-6 flex items-center justify-center gap-1.5 text-xs text-cream/40 hover:text-lemon">
               <ArrowLeft className="size-3.5 rtl:rotate-180" aria-hidden />
-              رجوع للموقع
+              {ar ? "رجوع للموقع" : "Back to site"}
             </Link>
           </motion.div>
         </div>
 
         <div className="relative hidden h-[min(760px,88vh)] overflow-hidden rounded-[2.5rem] border border-white/10 lg:block">
-          <Photo src={isRegister ? images.heroGym : images.gymDark} alt="تدريب وتغذية" wrapperClassName="absolute inset-0" className="object-cover" overlay />
+          <Photo
+            src={isRegister ? images.heroGym : images.gymDark}
+            alt={ar ? "تدريب وتغذية" : "Training and nutrition"}
+            wrapperClassName="absolute inset-0"
+            className="object-cover"
+            overlay
+          />
           <div className="absolute inset-0 bg-gradient-to-t from-ink via-ink/40 to-ink/10" aria-hidden />
           <div className="absolute inset-x-0 bottom-0 p-9">
             <div className="flex flex-wrap gap-2">
-              {["متابعة أسبوعية", "خطط مخصصة", "تحاليل ومكملات"].map((item) => (
+              {(ar
+                ? ["متابعة أسبوعية", "خطط مخصصة", "تحاليل ومكملات"]
+                : ["Weekly follow-up", "Custom plans", "Labs & supplements"]
+              ).map((item) => (
                 <span key={item} className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-ink/50 px-3 py-1.5 text-[11px] font-semibold text-cream/80 backdrop-blur">
                   <Check className="size-3 text-lemon" aria-hidden />
                   {item}
@@ -291,9 +355,15 @@ export default function Auth({ mode }: { mode: Mode }) {
               ))}
             </div>
             <p className="mt-6 max-w-md font-display text-2xl font-bold leading-snug text-cream">
-              «مش دايت… تحوّل كامل. خطة على مقاس جسمك، ومتابعة لحد ما توصل.»
+              {ar
+                ? "«مش دايت… تحوّل كامل. خطة على مقاس جسمك، ومتابعة لحد ما توصل.»"
+                : "“Not a diet — a full transformation. A plan built around your body, with follow-up until you get there.”"}
             </p>
-            <p className="mt-3 text-sm text-cream/50">د. مصطفى يوسف — استشاري تغذية علاجية ومدرب لياقة</p>
+            <p className="mt-3 text-sm text-cream/50">
+              {ar
+                ? "د. مصطفى يوسف — استشاري تغذية علاجية ومدرب لياقة"
+                : "Dr. Mostafa Youssef — clinical nutrition & training"}
+            </p>
           </div>
         </div>
       </div>

@@ -24,6 +24,17 @@ export const ar: Dict = {
     languageLabel: "English",
     menu: "القائمة",
     close: "إغلاق",
+    signIn: "تسجيل الدخول",
+    signInShort: "دخول",
+    signUp: "حساب جديد",
+    subscribeNow: "اشترك الآن",
+    subscribePlan: "اشترك في باقة",
+    dashboard: "لوحة التحكم",
+    myAccount: "حسابي",
+    accountAndPlan: "حسابي وباقتي",
+    securePayment: "دفع آمن عبر فودافون كاش أو إنستاباي",
+    accountSection: "حسابي",
+    subscriptionAndPayment: "الاشتراك والدفع",
   },
 
   hero: {

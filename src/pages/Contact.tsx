@@ -9,6 +9,7 @@ import { useToast } from "../components/ui/Toast";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { useLang } from "../lib/i18n";
+import { localize } from "../lib/localize";
 import { useSiteInfo } from "../lib/use-site-info";
 import { cn } from "../lib/utils";
 
@@ -77,10 +78,18 @@ export default function Contact() {
         },
       });
       setSent(true);
-      toast.success("وصلتنا رسالتك، وهنرد عليك في أقرب وقت.");
+      toast.success(
+        lang === "ar" ? "وصلتنا رسالتك، وهنرد عليك في أقرب وقت." : "We got your message — we'll get back to you soon."
+      );
       setMessage("");
     } catch (cause) {
-      toast.error(cause instanceof Error ? cause.message : "تعذر إرسال الرسالة. جرب تاني.");
+      toast.error(
+        cause instanceof Error
+          ? localize(cause.message, lang)
+          : lang === "ar"
+            ? "تعذر إرسال الرسالة. جرب تاني."
+            : "Couldn't send the message. Try again."
+      );
     } finally {
       setBusy(false);
     }

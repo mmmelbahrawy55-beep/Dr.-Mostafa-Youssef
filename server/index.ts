@@ -1,11 +1,10 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import multer from "multer";
 import { SignJWT, jwtVerify } from "jose";
-import { existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import {
-  DATA_DIR,
   DIST_DIR,
   MAX_UPLOAD_BYTES,
   SHOT_DIR,
@@ -34,10 +33,15 @@ import {
   findUserById,
   getCopyOverrides,
   getContent,
+  getJwtSecret,
   getMedia,
   getFile,
   getPayment,
   getSettings,
+  rateCount,
+  redis,
+  releaseOnce,
+  reserveOnce,
   listAudit,
   listContent,
   listCustomerRows,
@@ -72,26 +76,29 @@ import {
 } from "./security";
 import type { ContentItem, PublicUser, SiteSettings } from "../shared/types";
 
-const PORT = Number(process.env.PORT || 4000);
+// Some runners inject PORT=0; fall back to the documented dev port instead of
+// binding a random one the frontend proxy cannot reach.
+const PORT = Number(process.env.PORT) || 4000;
 const HOST = process.env.HOST || "127.0.0.1";
 const SESSION_COOKIE = "my_session";
 
 /* ------------------------------ session secret ----------------------------- */
 
-const secretFile = path.join(DATA_DIR, "jwt-secret");
-const secretValue =
-  process.env.JWT_SECRET?.trim() ||
-  (() => {
-    if (!existsSync(secretFile)) writeFileSync(secretFile, randomBytes(48).toString("hex"), { mode: 0o600 });
-    return readFileSync(secretFile, "utf8").trim();
-  })();
-const secret = new TextEncoder().encode(secretValue);
+let secretPromise: Promise<Uint8Array> | null = null;
+function getSecret() {
+  if (!secretPromise) {
+    secretPromise = getJwtSecret().then((value) => new TextEncoder().encode(value));
+  }
+  return secretPromise;
+}
 
 type Authed = Request & { user?: UserRow };
 
 const app = express();
 app.disable("x-powered-by");
-app.set("trust proxy", process.env.TRUST_PROXY === "1" ? 1 : false);
+// Vercel terminates TLS in front of the function: without this every request
+// shares the same proxy IP, which turns per-IP rate limits into one global lock.
+app.set("trust proxy", process.env.VERCEL || process.env.TRUST_PROXY === "1" ? 1 : false);
 app.use(express.json({ limit: "3mb" }));
 app.use(express.urlencoded({ extended: true }));
 
@@ -100,11 +107,26 @@ app.use((_req, res, next) => {
   res.setHeader("Referrer-Policy", "same-origin");
   res.setHeader("X-Frame-Options", "SAMEORIGIN");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  if (String(_req.headers["x-forwarded-proto"] ?? "").split(",")[0] === "https") {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
   next();
 });
 
-app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, time: nowIso() });
+// Reject cross-site state changes. SameSite=Lax already blocks most of them;
+// this also covers browsers/proxies that forward the cookie anyway.
+app.use((req, res, next) => {
+  if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
+  if (!process.env.VERCEL && process.env.NODE_ENV !== "production") return next();
+  const origin = req.headers.origin;
+  if (!origin) return next();
+  const host = String(req.headers["x-forwarded-host"] ?? req.headers.host ?? "");
+  try {
+    if (new URL(origin).host === host) return next();
+  } catch {
+    /* malformed origin */
+  }
+  res.status(403).json({ error: "طلب غير مسموح." });
 });
 
 /* --------------------------------- helpers -------------------------------- */
@@ -114,6 +136,18 @@ const asyncRoute =
   (req: Request, res: Response, next: NextFunction) => {
     Promise.resolve(handler(req as Authed, res, next)).catch(next);
   };
+
+app.get(
+  "/api/health",
+  asyncRoute(async (_req, res) => {
+    try {
+      const pong = await redis.ping();
+      res.json({ ok: pong === "PONG", redis: pong === "PONG", time: nowIso() });
+    } catch {
+      res.status(503).json({ ok: false, redis: false, time: nowIso() });
+    }
+  })
+);
 
 const toPublicUser = (row: UserRow): PublicUser => ({
   id: Number(row.id),
@@ -129,9 +163,11 @@ async function resolveUser(req: Request): Promise<UserRow | null> {
   const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
   if (!token) return null;
   try {
-    const { payload } = await jwtVerify(token, secret);
+    const { payload } = await jwtVerify(token, await getSecret());
     const row = await findUserById(Number(payload.sub));
     if (!row || row.blocked) return null;
+    // Password changes bump this so every previously issued cookie dies.
+    if (Number(payload.ver ?? 0) !== Number(row.session_version ?? 0)) return null;
     return row;
   } catch {
     return null;
@@ -168,12 +204,12 @@ const requireAdmin = asyncRoute(async (req, res, next) => {
 });
 
 async function issueSession(res: Response, user: UserRow) {
-  const token = await new SignJWT({ role: user.role })
+  const token = await new SignJWT({ role: user.role, ver: Number(user.session_version ?? 0) })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(String(user.id))
     .setIssuedAt()
     .setExpirationTime("7d")
-    .sign(secret);
+    .sign(await getSecret());
 
   const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
   res.setHeader(
@@ -201,30 +237,26 @@ app.get(
 
 /* ------------------------------ rate limiting ----------------------------- */
 
-const buckets = new Map<string, { count: number; reset: number }>();
-function limited(key: string, max: number, windowMs: number) {
-  const now = Date.now();
-  const bucket = buckets.get(key);
-  if (!bucket || bucket.reset < now) {
-    buckets.set(key, { count: 1, reset: now + windowMs });
+/**
+ * Redis-backed fixed-window limiter: serverless instances come and go, so an
+ * in-memory Map would reset on every cold start and let brute force through.
+ * On a Redis error we fail open rather than locking real users out.
+ */
+async function limited(bucket: string, max: number, windowMs: number) {
+  const seconds = Math.max(1, Math.ceil(windowMs / 1000));
+  const slot = Math.floor(Date.now() / windowMs);
+  try {
+    const count = await rateCount(`${bucket}:${slot}`, seconds);
+    return count > max;
+  } catch {
     return false;
   }
-  bucket.count += 1;
-  return bucket.count > max;
 }
-
-// Keep the in-memory rate-limit buckets from growing forever.
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, bucket] of buckets) {
-    if (bucket.reset < now) buckets.delete(key);
-  }
-}, 10 * 60_000).unref();
 
 /* --------------------------------- uploads -------------------------------- */
 
 const imageFilter: multer.Options["fileFilter"] = (_req, file, done) => {
-  const allowed = ["image/jpeg", "image/png", "image/webp", "image/heic"];
+  const allowed = ["image/jpeg", "image/png", "image/webp"];
   done(null, allowed.includes(file.mimetype));
 };
 
@@ -251,6 +283,22 @@ const mediaUpload = multer({
   limits: { fileSize: MAX_UPLOAD_BYTES },
   fileFilter: imageFilter,
 });
+
+/**
+ * Reject obviously oversized bodies from the Content-Length header before
+ * multer starts streaming, so the client gets a clean 413 instead of a reset
+ * connection halfway through a 5 MB upload.
+ */
+function contentLengthGuard(req: Request, res: Response, next: NextFunction) {
+  const length = Number(req.headers["content-length"] ?? 0);
+  if (Number.isFinite(length) && length > MAX_UPLOAD_BYTES + 64 * 1024) {
+    res.status(413).json({
+      error: `حجم الصورة كبير. الحد ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} ميجا.`,
+    });
+    return;
+  }
+  next();
+}
 
 function isRealImage(filePath: string) {
   try {
@@ -342,7 +390,7 @@ app.post(
   "/api/auth/register",
   asyncRoute(async (req, res) => {
     const ip = req.ip ?? "unknown";
-    if (limited(`register:${ip}`, 6, 60_000)) {
+    if (await limited(`register:${ip}`, 6, 60_000)) {
       res.status(429).json({ error: "محاولات كتير، استنى دقيقة وحاول تاني." });
       return;
     }
@@ -382,7 +430,7 @@ app.post(
     const email = str(req.body.email, 160).toLowerCase();
     const password = String(req.body.password ?? "");
 
-    if (limited(`login:${ip}:${email}`, 8, 60_000)) {
+    if (await limited(`login:${ip}:${email}`, 8, 60_000)) {
       res.status(429).json({ error: "محاولات دخول كتير. استنى دقيقة." });
       return;
     }
@@ -435,23 +483,36 @@ app.patch(
   requireAuth,
   asyncRoute(async (req, res) => {
     const user = req.user!;
-    const name = str(req.body.name, 80) || user.name;
-    const phone = str(req.body.phone, 24);
+    const patch: Partial<UserRow> = {};
+
+    if (req.body.name !== undefined) {
+      const name = str(req.body.name, 80);
+      if (name.length < 2) return void res.status(400).json({ error: "اكتب اسمك بالكامل." });
+      patch.name = name;
+    }
+    if (req.body.phone !== undefined) {
+      const phone = str(req.body.phone, 24);
+      if (phone && !/^[0-9+\-\s()]{8,20}$/.test(phone)) {
+        return void res.status(400).json({ error: "رقم الموبايل مش صحيح." });
+      }
+      patch.phone = phone;
+    }
+
     const password = String(req.body.password ?? "");
-
-    if (password && password.length < 8) {
-      res.status(400).json({ error: "الباسورد الجديد لازم 8 حروف على الأقل." });
-      return;
-    }
-
     if (password) {
+      if (password.length < 8) return void res.status(400).json({ error: "الباسورد الجديد لازم 8 حروف على الأقل." });
+      const current = String(req.body.currentPassword ?? "");
+      if (!checkPassword(current, user.password_salt, user.password_hash)) {
+        return void res.status(400).json({ error: "الباسورد الحالي مش صح." });
+      }
       const { salt, hash } = hashPassword(password);
-      await updateUser(user.id, { name, phone, password_salt: salt, password_hash: hash });
-    } else {
-      await updateUser(user.id, { name, phone });
+      patch.password_salt = salt;
+      patch.password_hash = hash;
+      patch.session_version = Number(user.session_version ?? 0) + 1;
     }
 
-    const updated = (await findUserById(user.id))!;
+    const updated = (await updateUser(user.id, patch))!;
+    if (password) await issueSession(res, updated);
     res.json({ user: toPublicUser(updated) });
   })
 );
@@ -492,7 +553,7 @@ app.post(
   "/api/messages",
   asyncRoute(async (req, res) => {
     const ip = req.ip ?? "unknown";
-    if (limited(`msg:${ip}`, 8, 60_000)) {
+    if (await limited(`msg:${ip}`, 8, 60_000)) {
       res.status(429).json({ error: "بعتنالنا رسايل كتير. استنى شوية." });
       return;
     }
@@ -518,10 +579,13 @@ app.post(
 app.post(
   "/api/payments",
   requireAuth,
+  contentLengthGuard,
   shotUpload.single("screenshot"),
   asyncRoute(async (req, res) => {
     const user = req.user!;
     const file = req.file;
+    let shotClaim: string | null = null;
+    let refClaim: string | null = null;
     const cleanup = () => {
       if (file) {
         try {
@@ -581,15 +645,32 @@ app.post(
       }
 
       const referenceKey = sha256(`${method}:${reference.toLowerCase().replace(/\s+/g, "")}`);
-      const duplicateShot = await findPaymentBySha(hash);
-      const duplicateRef = await findPaymentByReferenceKey(referenceKey);
 
-      if (duplicateShot) {
+      if (await findPaymentBySha(hash)) {
         cleanup();
         res.status(409).json({ error: "الصورة دي اتقدّمت قبل كده. مينفعش نستخدم نفس الإيصال مرتين." });
         return;
       }
-      if (duplicateRef) {
+      if (await findPaymentByReferenceKey(referenceKey)) {
+        cleanup();
+        res.status(409).json({ error: "رقم العملية ده مستخدم قبل كده. تأكد من رقم العملية." });
+        return;
+      }
+
+      // Atomic claims: two uploads racing with the same receipt can no longer
+      // both pass the checks above and create two payments.
+      shotClaim = `shot:${hash}`;
+      refClaim = `ref:${referenceKey}`;
+      if (!(await reserveOnce(shotClaim))) {
+        shotClaim = null;
+        cleanup();
+        res.status(409).json({ error: "الصورة دي اتقدّمت قبل كده. مينفعش نستخدم نفس الإيصال مرتين." });
+        return;
+      }
+      if (!(await reserveOnce(refClaim))) {
+        refClaim = null;
+        await releaseOnce(shotClaim).catch(() => undefined);
+        shotClaim = null;
         cleanup();
         res.status(409).json({ error: "رقم العملية ده مستخدم قبل كده. تأكد من رقم العملية." });
         return;
@@ -655,6 +736,8 @@ app.post(
       });
     } catch (error: any) {
       cleanup();
+      if (shotClaim) await releaseOnce(shotClaim).catch(() => undefined);
+      if (refClaim) await releaseOnce(refClaim).catch(() => undefined);
       if (String(error?.message ?? "").includes("UNIQUE")) {
         res.status(409).json({ error: "الإيصال أو رقم العملية مستخدم قبل كده." });
         return;
@@ -922,6 +1005,7 @@ app.patch(
       const { salt, hash } = hashPassword(password);
       patch.password_salt = salt;
       patch.password_hash = hash;
+      patch.session_version = Number(target.session_version ?? 0) + 1;
       fields.push("password");
     }
 
@@ -1232,6 +1316,7 @@ app.get(
 app.post(
   "/api/admin/media",
   requireAdmin,
+  contentLengthGuard,
   mediaUpload.single("file"),
   asyncRoute(async (req, res) => {
     const file = req.file;
@@ -1291,6 +1376,98 @@ app.delete(
   })
 );
 
+/* --------------------------------- exports -------------------------------- */
+
+const csvCell = (value: unknown) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+
+function sendCsv(res: Response, filename: string, rows: (string | number | null | undefined)[][]) {
+  const body = "\uFEFF" + rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  res.setHeader("Cache-Control", "no-store");
+  res.send(body);
+}
+
+app.get(
+  "/api/admin/export/payments.csv",
+  requireAdmin,
+  asyncRoute(async (_req, res) => {
+    const [payments, users] = await Promise.all([allPayments(), listCustomerRows()]);
+    const usersById = new Map(users.map((user) => [user.id, user]));
+    sendCsv(res, "payments.csv", [
+      ["id", "created_at", "customer", "email", "phone", "plan", "amount_egp", "method", "reference", "sender", "status", "notes"],
+      ...payments.map((payment) => {
+        const user = usersById.get(Number(payment.user_id));
+        return [
+          payment.id,
+          payment.created_at,
+          user?.name ?? "",
+          user?.email ?? "",
+          user?.phone ?? "",
+          payment.program_name,
+          payment.amount,
+          payment.method,
+          payment.reference,
+          payment.sender,
+          payment.status,
+          payment.note,
+        ];
+      }),
+    ]);
+    await logAudit(_req.user, "export.payments", "payments", payments.length);
+  })
+);
+
+app.get(
+  "/api/admin/export/customers.csv",
+  requireAdmin,
+  asyncRoute(async (_req, res) => {
+    const [users, summaries] = await Promise.all([listCustomerRows(), customerSummaries(nowIso())]);
+    sendCsv(res, "customers.csv", [
+      ["id", "name", "email", "phone", "joined", "active_plans", "total_paid_egp", "plan_ends"],
+      ...users.map((user) => {
+        const summary = summaries.get(user.id);
+        return [
+          user.id,
+          user.name,
+          user.email,
+          user.phone,
+          user.created_at,
+          summary?.activeSubscriptions ?? 0,
+          summary?.spent ?? 0,
+          summary?.endsAt ?? "",
+        ];
+      }),
+    ]);
+    await logAudit(_req.user, "export.customers", "users", users.length);
+  })
+);
+
+app.get(
+  "/api/admin/export/subscriptions.csv",
+  requireAdmin,
+  asyncRoute(async (_req, res) => {
+    const [subscriptions, users] = await Promise.all([allSubscriptions(), listCustomerRows()]);
+    const usersById = new Map(users.map((user) => [user.id, user]));
+    sendCsv(res, "subscriptions.csv", [
+      ["id", "customer", "email", "plan", "starts_at", "ends_at", "status"],
+      ...subscriptions.map((subscription) => {
+        const user = usersById.get(Number(subscription.user_id));
+        return [
+          subscription.id,
+          user?.name ?? "",
+          user?.email ?? "",
+          subscription.program_name,
+          subscription.starts_at,
+          subscription.ends_at,
+          subscription.status,
+        ];
+      }),
+    ]);
+    await logAudit(_req.user, "export.subscriptions", "subscriptions", subscriptions.length);
+  })
+);
+
 app.use("/api", (_req, res) => res.status(404).json({ error: "المسار غير موجود." }));
 
 /* ---------------------------------- static -------------------------------- */
@@ -1311,7 +1488,9 @@ if (existsSync(DIST_DIR)) {
 app.use((error: any, _req: Request, res: Response, _next: NextFunction) => {
   console.error("[api]", error);
   if (error?.code === "LIMIT_FILE_SIZE") {
-    res.status(413).json({ error: "حجم الصورة كبير. الحد 10 ميجا." });
+    res.status(413).json({
+      error: `حجم الصورة كبير. الحد ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} ميجا.`,
+    });
     return;
   }
   res.status(500).json({ error: "حصل خطأ في السيرفر. جرب تاني." });

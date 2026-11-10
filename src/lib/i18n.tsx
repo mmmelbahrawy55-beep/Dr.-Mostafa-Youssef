@@ -18,13 +18,15 @@ const STORAGE_KEY = "my-lang";
 
 export function LanguageProvider({ children }: { children: ReactNode }) {
   const { data } = useSiteData();
-  // Default to English on first visit; an explicit choice is remembered.
+  // Arabic is the primary language for this audience; a saved choice always wins.
   const [lang, setLangState] = useState<Lang>(() => {
     try {
-      return localStorage.getItem(STORAGE_KEY) === "ar" ? "ar" : "en";
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved === "ar" || saved === "en") return saved;
     } catch {
-      return "en";
+      /* storage unavailable — fall through */
     }
+    return "ar";
   });
 
   useEffect(() => {

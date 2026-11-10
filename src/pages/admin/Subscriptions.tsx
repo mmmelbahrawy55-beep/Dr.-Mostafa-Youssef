@@ -98,14 +98,22 @@ export default function AdminSubscriptions() {
       title="إدارة الباقات المشترك فيها"
       text="تابع كل الاشتراكات، راجع تواريخ الانتهاء، وأضف اشتراك يدوي لأي عميل."
       actions={
-        <button
-          type="button"
-          onClick={openGrant}
-          className="inline-flex items-center gap-1.5 rounded-full bg-lemon px-4 py-2 text-[11px] font-bold text-ink transition-transform hover:-translate-y-0.5"
-        >
-          <Plus className="size-3.5" aria-hidden />
-          إضافة اشتراك
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <a
+            href="/api/admin/export/subscriptions.csv"
+            className="inline-flex items-center gap-1.5 rounded-full border border-lemon/30 bg-lemon/10 px-4 py-2 text-[11px] font-bold text-lemon transition-colors hover:bg-lemon/15"
+          >
+            تصدير CSV
+          </a>
+          <button
+            type="button"
+            onClick={openGrant}
+            className="inline-flex items-center gap-1.5 rounded-full bg-lemon px-4 py-2 text-[11px] font-bold text-ink transition-transform hover:-translate-y-0.5"
+          >
+            <Plus className="size-3.5" aria-hidden />
+            إضافة اشتراك
+          </button>
+        </div>
       }
     >
       <div className="grid grid-cols-3 gap-3">

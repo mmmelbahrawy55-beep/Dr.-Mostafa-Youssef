@@ -13,5 +13,6 @@ data/
 
 .vercel
 .env*
+!.env.example
 
 build/

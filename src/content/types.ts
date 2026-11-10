@@ -280,6 +280,17 @@ export interface Dict {
     languageLabel: string;
     menu: string;
     close: string;
+    signIn: string;
+    signInShort: string;
+    signUp: string;
+    subscribeNow: string;
+    subscribePlan: string;
+    dashboard: string;
+    myAccount: string;
+    accountAndPlan: string;
+    securePayment: string;
+    accountSection: string;
+    subscriptionAndPayment: string;
   };
   hero: Hero;
   stats: Stat[];

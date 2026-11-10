@@ -1,6 +1,26 @@
 import { deflateSync } from "node:zlib";
+import { existsSync, readFileSync } from "node:fs";
 
 const BASE = process.env.SMOKE_BASE || "http://127.0.0.1:4000";
+
+// These checks create customers, payments and messages. Never point them at a
+// live deployment unless that is intentional.
+const isLocal = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/?$/.test(BASE);
+if (!isLocal && process.env.ALLOW_REMOTE_SMOKE !== "1") {
+  console.error(`Refusing to run write-heavy smoke tests against ${BASE}. Set ALLOW_REMOTE_SMOKE=1 to override.`);
+  process.exit(2);
+}
+
+function readSeededAdminPassword() {
+  if (process.env.ADMIN_PASSWORD) return process.env.ADMIN_PASSWORD;
+  const file = "data/admin-password.txt";
+  if (!existsSync(file)) return null;
+  const match = /^password:\s*(.+)$/m.exec(readFileSync(file, "utf8"));
+  return match?.[1]?.trim() ?? null;
+}
+
+const adminPassword = readSeededAdminPassword();
+const adminEmail = process.env.ADMIN_EMAIL || "admin@drmostafayoussef.com";
 
 /* ------------------------- helpers ------------------------- */
 const results = [];
@@ -139,6 +159,23 @@ try {
 }
 
 // --- public site ---
+// Receipt auto-approval is off by default (manual review); enable it for this
+// dedicated test database so both the automatic and manual paths stay covered.
+if (adminPassword) {
+  const early = await admin.post("/api/auth/login", { email: adminEmail, password: adminPassword });
+  if (early.status === 200) {
+    const current = await admin.get("/api/admin/settings");
+    if (current.status === 200 && current.data?.settings) {
+      await admin.put("/api/admin/settings", {
+        ...current.data.settings,
+        payments: { ...current.data.settings.payments, autoApprove: true },
+      });
+    }
+  } else {
+    console.log(`NOTE  smoke could not enable auto-approval (admin login ${early.status})`);
+  }
+}
+
 const site = await customer.get("/api/site");
 assert("GET /api/site", site.status === 200, `status ${site.status}`);
 assert(
@@ -246,8 +283,8 @@ pendingPaymentId = upload2.data?.payment?.id;
 
 // --- admin login ---
 const adminLogin = await admin.post("/api/auth/login", {
-  email: process.env.ADMIN_EMAIL || "admin@drmostafayoussef.com",
-  password: process.env.ADMIN_PASSWORD || "Mostafa@2026!",
+  email: adminEmail,
+  password: adminPassword ?? "",
 });
 assert("admin login", adminLogin.status === 200 && adminLogin.data?.user?.role === "admin", `status ${adminLogin.status}`);
 if (adminLogin.status !== 200) throw new Error("admin login failed: " + JSON.stringify(adminLogin.data));
@@ -410,6 +447,20 @@ const uploadedMedia = mediaList.data?.media?.find((m) => String(m.filename ?? ""
 if (uploadedMedia) {
   const delMedia = await admin.delete(`/api/admin/media/${uploadedMedia.id}`);
   assert("admin media delete", delMedia.status === 200, `${delMedia.status}`);
+}
+
+// --- CSV exports ---
+for (const [name, path] of [
+  ["payments", "/api/admin/export/payments.csv"],
+  ["customers", "/api/admin/export/customers.csv"],
+  ["subscriptions", "/api/admin/export/subscriptions.csv"],
+]) {
+  const exported = await admin.get(path);
+  assert(
+    `CSV export: ${name}`,
+    exported.status === 200 && String(exported.headers.get("content-type")).includes("text/csv") && exported.text.includes(","),
+    `status ${exported.status}`
+  );
 }
 
 // --- audit ---

@@ -1,4 +1,4 @@
-import { CheckCircle2, CreditCard, ImageIcon, ReceiptText, Search, ShieldAlert, XCircle } from "lucide-react";
+import { CheckCircle2, CreditCard, Download, ImageIcon, ReceiptText, Search, ShieldAlert, XCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { PaymentDTO } from "../../../shared/types";
@@ -95,10 +95,19 @@ export default function AdminPayments() {
       title="مراجعة التحويلات"
       text="راجع الإيصالات، أكّد المبلغ ورقم العملية، وقرر التفعيل أو الرفض. كل إجراء بيتسجل في سجل العمليات."
       actions={
-        <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1.5 text-[10px] text-cream/45">
-          <CreditCard className="size-3.5 text-lemon/60" aria-hidden />
-          {filtered.length} دفعة
-        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1.5 text-[10px] text-cream/45">
+            <CreditCard className="size-3.5 text-lemon/60" aria-hidden />
+            {filtered.length} دفعة
+          </span>
+          <a
+            href="/api/admin/export/payments.csv"
+            className="inline-flex items-center gap-1.5 rounded-full border border-lemon/30 bg-lemon/10 px-3 py-1.5 text-[10px] font-bold text-lemon transition-colors hover:bg-lemon/15"
+          >
+            <Download className="size-3.5" aria-hidden />
+            تصدير CSV
+          </a>
+        </div>
       }
     >
       <div className="flex flex-wrap items-center justify-between gap-3">

@@ -62,7 +62,9 @@ export async function api<T>(path: string, init: ApiInit = {}): Promise<T> {
   return data as T;
 }
 
-export const formatEgp = (value: number) => `${new Intl.NumberFormat("en-US").format(value)} ج.م`;
+/** Currency suffix follows the page language; the admin panel stays Arabic by default. */
+export const formatEgp = (value: number, lang: "ar" | "en" = "ar") =>
+  `${new Intl.NumberFormat("en-US").format(value)} ${lang === "ar" ? "ج.م" : "EGP"}`;
 
 export const formatDate = (value: string | Date, locale = "ar-EG") =>
   new Date(value).toLocaleDateString(locale, { day: "numeric", month: "long", year: "numeric" });

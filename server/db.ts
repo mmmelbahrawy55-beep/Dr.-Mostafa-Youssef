@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { Redis } from "@upstash/redis";
 import { ar } from "../src/content/ar";
@@ -49,6 +50,7 @@ const LOCAL_KEYS = [
   "KV_REST_API_TOKEN",
   "KV_URL",
   "REDIS_URL",
+  "REDIS_PREFIX",
   "JWT_SECRET",
   "ADMIN_EMAIL",
   "ADMIN_PASSWORD",
@@ -96,10 +98,18 @@ export const redis = new Redis({ url: KV_URL, token: KV_TOKEN, automaticDeserial
 
 type Row = Record<string, any>;
 
-const tableKey = (table: string) => `dm:t:${table}`;
-const seqKey = (table: string) => `dm:s:${table}`;
-const settingKey = (key: string) => `dm:set:${key}`;
-const fileKey = (name: string) => `dm:f:${name}`;
+/**
+ * Namespace every key so a development instance can share the same Upstash
+ * database without ever touching production rows: `REDIS_PREFIX=dev`.
+ */
+const PREFIX = `${(process.env.REDIS_PREFIX || "dm").replace(/:+$/, "")}:`;
+
+const tableKey = (table: string) => `${PREFIX}t:${table}`;
+const seqKey = (table: string) => `${PREFIX}s:${table}`;
+const settingKey = (key: string) => `${PREFIX}set:${key}`;
+const fileKey = (name: string) => `${PREFIX}f:${name}`;
+const uniqueKey = (name: string) => `${PREFIX}u:${name}`;
+const rateKey = (bucket: string) => `${PREFIX}rl:${bucket}`;
 
 /** `hgetall` answers with a flat [field, value, ...] array when auto-parse is off. */
 function toPairs(raw: unknown): [string, string][] {
@@ -148,6 +158,28 @@ export async function findRow<T = Row>(
 
 export async function nextId(table: string): Promise<number> {
   return Number(await redis.incr(seqKey(table)));
+}
+
+/**
+ * Atomically claims a receipt hash / transaction reference. Returns false when
+ * another request already owns it, which closes the check-then-write race
+ * between two simultaneous uploads of the same screenshot.
+ */
+export async function reserveOnce(name: string): Promise<boolean> {
+  const result = await redis.set(uniqueKey(name), "1", { nx: true });
+  return Boolean(result);
+}
+
+export async function releaseOnce(name: string): Promise<void> {
+  await redis.del(uniqueKey(name));
+}
+
+/** Shared rate-limit counter; INCR+EXPIRE works across serverless instances. */
+export async function rateCount(bucket: string, seconds: number): Promise<number> {
+  const key = rateKey(bucket);
+  const count = Number(await redis.incr(key));
+  if (count === 1) await redis.expire(key, seconds);
+  return count;
 }
 
 export async function putRow(table: string, row: Row): Promise<void> {
@@ -207,7 +239,10 @@ const defaultSettings: SiteSettings = {
       "حوّل قيمة الباقة على الرقم/العنوان الموضح، واحتفظ بصورة التحويل. ارفع الصورة هنا مع رقم العملية، وسيتم تفعيل اشتراكك تلقائيًا عند التحقق.",
     instructionsEn:
       "Transfer the plan amount to the number/address shown and keep the receipt. Upload the screenshot with the transaction reference and your subscription activates automatically once verified.",
-    autoApprove: true,
+    // Receipt screenshots are not machine-verifiable yet, so activation starts
+    // in manual review. The doctor can enable automatic activation from
+    // settings once he accepts that risk.
+    autoApprove: false,
   },
   hero: { image: images.hero },
   announcement: { ar: "", en: "", enabled: false },
@@ -225,6 +260,27 @@ export async function getSettings(): Promise<SiteSettings> {
 
 export async function saveSettings(next: SiteSettings): Promise<void> {
   await setSetting("site", next);
+}
+
+/**
+ * Session signing key. `JWT_SECRET` wins; otherwise a random key is stored in
+ * Redis once, so every serverless instance signs with the same secret and
+ * logins survive cold starts even if the env var was forgotten.
+ */
+export async function getJwtSecret(): Promise<string> {
+  const fromEnv = process.env.JWT_SECRET?.trim();
+  if (fromEnv) return fromEnv;
+
+  const key = settingKey("jwt-secret");
+  const existing = await redis.get(key);
+  if (existing) return String(existing);
+
+  const generated = randomBytes(48).toString("hex");
+  const claimed = await redis.set(key, generated, { nx: true });
+  if (claimed) return generated;
+
+  const stored = await redis.get(key);
+  return stored ? String(stored) : generated;
 }
 
 export async function getCopyOverrides(): Promise<{ ar: Record<string, string>; en: Record<string, string> }> {
@@ -321,6 +377,7 @@ export type UserRow = {
   password_salt: string;
   password_hash: string;
   blocked: number;
+  session_version?: number;
   created_at: string;
 };
 
@@ -347,7 +404,7 @@ export async function createUser(input: {
   password_hash: string;
 }): Promise<UserRow> {
   const id = await nextId("users");
-  const row: UserRow = { ...input, id, blocked: 0, created_at: nowIso() };
+  const row: UserRow = { ...input, id, blocked: 0, session_version: 0, created_at: nowIso() };
   await putRow("users", row);
   return row;
 }
@@ -658,10 +715,10 @@ type StoredFile = { mime: string; data: string };
 
 /**
  * Binary payloads (payment screenshots, media-library images) are base64 JSON
- * blobs in Redis. Upstash caps a value at 10 MB, so uploads are limited to
- * 6 MB on the wire (8 MB once base64-encoded) — see MAX_UPLOAD_BYTES.
+ * blobs in Redis. Upstash caps a single value at 10 MB, and Vercel caps a
+ * serverless request body at 4.5 MB, so the wire limit stays at 4 MB.
  */
-export const MAX_UPLOAD_BYTES = 6 * 1024 * 1024;
+export const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
 
 export async function putFile(name: string, buffer: Buffer, mime: string): Promise<void> {
   const payload: StoredFile = { mime, data: buffer.toString("base64") };
@@ -685,7 +742,8 @@ export async function deleteFile(name: string): Promise<void> {
 
 /* ----------------------------------- seed ----------------------------------- */
 
-const seedPassword = process.env.ADMIN_PASSWORD || "Mostafa@2026!";
+const explicitAdminPassword = process.env.ADMIN_PASSWORD;
+const seedPassword = explicitAdminPassword || randomBytes(18).toString("base64url");
 const seedEmail = (process.env.ADMIN_EMAIL || "admin@drmostafayoussef.com").toLowerCase();
 
 function parseAmount(value: string) {
@@ -704,6 +762,14 @@ async function seedAdmin() {
     password_salt: salt,
     password_hash: hash,
   });
+
+  if (!explicitAdminPassword) {
+    // Never ship a documented default password. On a fresh database we create
+    // a random one and leave it in a git-ignored file (Vercel: /tmp, see logs).
+    const file = path.join(DATA_DIR, "admin-password.txt");
+    writeFileSync(file, `email: ${seedEmail}\npassword: ${seedPassword}\n`, { mode: 0o600 });
+    console.log(`[db] Seeded admin ${seedEmail}; password written to ${file}`);
+  }
 }
 
 async function seedContent() {
@@ -839,9 +905,20 @@ async function seedContent() {
   }
 }
 
+async function seedUniqueClaimMarkers() {
+  // Backfill the atomic claim markers for receipts submitted before the
+  // reservation keys existed, so an old screenshot can never be reused.
+  const payments = await allRows<{ screenshot_sha?: string; reference_key?: string }>("payments");
+  for (const payment of payments) {
+    if (payment.screenshot_sha) await redis.set(uniqueKey(`shot:${payment.screenshot_sha}`), "1", { nx: true });
+    if (payment.reference_key) await redis.set(uniqueKey(`ref:${payment.reference_key}`), "1", { nx: true });
+  }
+}
+
 async function seed() {
   await seedAdmin();
   await seedContent();
+  await seedUniqueClaimMarkers();
   if (!(await getSetting<SiteSettings | null>("site", null))) {
     await saveSettings(defaultSettings);
   }

@@ -90,21 +90,21 @@ export function Footer() {
           </div>
 
           <div>
-            <h3 className="text-xs font-bold uppercase tracking-[0.2em] text-cream/40">حسابي</h3>
+            <h3 className="text-xs font-bold uppercase tracking-[0.2em] text-cream/40">{t.ui.accountSection}</h3>
             <ul className="mt-5 space-y-2.5">
               <li>
                 <Link to={user ? (user.role === "admin" ? "/admin" : "/account") : "/login"} className="text-sm text-cream/65 transition-colors hover:text-lemon">
-                  {user ? (user.role === "admin" ? "لوحة التحكم" : "حسابي وباقتي") : "تسجيل الدخول"}
+                  {user ? (user.role === "admin" ? t.ui.dashboard : t.ui.accountAndPlan) : t.ui.signIn}
                 </Link>
               </li>
               <li>
                 <Link to="/register" className="text-sm text-cream/65 transition-colors hover:text-lemon">
-                  حساب جديد
+                  {t.ui.signUp}
                 </Link>
               </li>
               <li>
                 <Link to={navPaths.programs} className="text-sm text-cream/65 transition-colors hover:text-lemon">
-                  الاشتراك والدفع
+                  {t.ui.subscriptionAndPayment}
                 </Link>
               </li>
               {t.services.slice(0, 4).map((service) => (
@@ -142,7 +142,7 @@ export function Footer() {
               </li>
             </ul>
             <CTA to={navPaths.programs} size="sm" className="mt-6" variant="outline" icon={false}>
-              اشترك في باقة
+              {t.ui.subscribePlan}
             </CTA>
           </div>
         </div>

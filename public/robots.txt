@@ -1,4 +1,5 @@
 User-agent: *
-Allow: /
+Disallow: /admin/
+Disallow: /account
 
-Sitemap: https://drmostafayoussef.com/sitemap.xml
+Sitemap: https://dr-mostafa-youssef.vercel.app/sitemap.xml

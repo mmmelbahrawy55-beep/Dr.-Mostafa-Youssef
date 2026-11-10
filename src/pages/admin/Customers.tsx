@@ -194,14 +194,22 @@ export default function AdminCustomers() {
       title="إدارة العملاء"
       text="كل عميل، اشتراكاته، ومدفوعاته. تقدر تعدّل بياناته، توقف حسابه، أو تضيف له اشتراك يدوي."
       actions={
-        <button
-          type="button"
-          onClick={() => setCreateOpen(true)}
-          className="inline-flex items-center gap-1.5 rounded-full bg-lemon px-4 py-2 text-[11px] font-bold text-ink transition-transform hover:-translate-y-0.5"
-        >
-          <Plus className="size-3.5" aria-hidden />
-          إضافة عميل
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <a
+            href="/api/admin/export/customers.csv"
+            className="inline-flex items-center gap-1.5 rounded-full border border-lemon/30 bg-lemon/10 px-4 py-2 text-[11px] font-bold text-lemon transition-colors hover:bg-lemon/15"
+          >
+            تصدير CSV
+          </a>
+          <button
+            type="button"
+            onClick={() => setCreateOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-full bg-lemon px-4 py-2 text-[11px] font-bold text-ink transition-transform hover:-translate-y-0.5"
+          >
+            <Plus className="size-3.5" aria-hidden />
+            إضافة عميل
+          </button>
+        </div>
       }
     >
       <div className="grid grid-cols-3 gap-3">

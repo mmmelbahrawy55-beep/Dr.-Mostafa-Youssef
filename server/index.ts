@@ -1487,6 +1487,10 @@ if (existsSync(DIST_DIR)) {
 
 app.use((error: any, _req: Request, res: Response, _next: NextFunction) => {
   console.error("[api]", error);
+  if (error?.type === "entity.parse.failed") {
+    res.status(400).json({ error: "الطلب مش مكتمل. جرب تاني." });
+    return;
+  }
   if (error?.code === "LIMIT_FILE_SIZE") {
     res.status(413).json({
       error: `حجم الصورة كبير. الحد ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} ميجا.`,

@@ -444,7 +444,16 @@ assert("admin media upload", mediaUpload.status === 201, `${mediaUpload.status} 
 const mediaList = await admin.get("/api/admin/media");
 assert("admin media list", mediaList.status === 200 && mediaList.data?.media?.length >= 1, `${mediaList.data?.media?.length} items`);
 const uploadedMedia = mediaList.data?.media?.find((m) => String(m.filename ?? "").includes("media"));
-if (uploadedMedia) {
+const justUploaded = mediaList.data?.media?.find((m) => m.id === mediaUpload.data?.media?.id);
+assert(
+  "admin media records uploader and dimensions",
+  Boolean(justUploaded) && typeof justUploaded?.width === "number" && String(justUploaded?.uploadedByName ?? "").length > 0,
+  JSON.stringify(justUploaded ?? {}).slice(0, 200)
+);
+if (justUploaded) {
+  const delMedia = await admin.delete(`/api/admin/media/${justUploaded.id}`);
+  assert("admin media delete", delMedia.status === 200, `${delMedia.status}`);
+} else if (uploadedMedia) {
   const delMedia = await admin.delete(`/api/admin/media/${uploadedMedia.id}`);
   assert("admin media delete", delMedia.status === 200, `${delMedia.status}`);
 }

@@ -707,6 +707,10 @@ export type MediaRow = {
   mime: string;
   size: number;
   created_at: string;
+  width?: number | null;
+  height?: number | null;
+  uploaded_by?: number | null;
+  uploaded_by_name?: string;
 };
 
 export async function createMedia(input: Omit<MediaRow, "id">): Promise<number> {

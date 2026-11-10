@@ -1334,6 +1334,14 @@ app.get(
   requireAdmin,
   asyncRoute(async (_req, res) => {
     const rows = await listMedia(200);
+    // Rows uploaded before the uploader was stored fall back to whoever the
+    // audit log says uploaded them, so old images are never shown as anonymous.
+    const uploaders = new Map<string, string>();
+    for (const entry of await listAudit(500)) {
+      if (entry.action === "media.upload" && !uploaders.has(String(entry.entity_id))) {
+        uploaders.set(String(entry.entity_id), String(entry.actor_name ?? ""));
+      }
+    }
     res.json({
       media: rows.map((row) => ({
         id: Number(row.id),
@@ -1342,6 +1350,10 @@ app.get(
         mime: row.mime,
         size: Number(row.size),
         createdAt: row.created_at,
+        width: row.width ?? null,
+        height: row.height ?? null,
+        uploadedBy: row.uploaded_by ?? null,
+        uploadedByName: row.uploaded_by_name || uploaders.get(String(row.id)) || "",
       })),
     });
   })
@@ -1367,6 +1379,8 @@ app.post(
     const filename = path.basename(file.path);
     const url = `/uploads/${filename}`;
     const bytes = readFileSync(file.path);
+    const dims = imageSize(file.path);
+    const createdAt = nowIso();
 
     let mediaId: number;
     try {
@@ -1376,7 +1390,11 @@ app.post(
         filename,
         mime: file.mimetype,
         size: file.size,
-        created_at: nowIso(),
+        created_at: createdAt,
+        width: dims.width,
+        height: dims.height,
+        uploaded_by: req.user?.id ?? null,
+        uploaded_by_name: req.user?.name ?? "",
       });
     } catch (error) {
       await deleteFile(filename).catch(() => undefined);
@@ -1391,7 +1409,18 @@ app.post(
 
     await logAudit(req.user, "media.upload", "media", mediaId, { url });
     res.status(201).json({
-      media: { id: mediaId, url, filename, mime: file.mimetype, size: file.size, createdAt: nowIso() },
+      media: {
+        id: mediaId,
+        url,
+        filename,
+        mime: file.mimetype,
+        size: file.size,
+        createdAt,
+        width: dims.width,
+        height: dims.height,
+        uploadedBy: req.user?.id ?? null,
+        uploadedByName: req.user?.name ?? "",
+      },
     });
   })
 );

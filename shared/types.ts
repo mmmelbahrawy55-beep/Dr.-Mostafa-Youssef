@@ -85,6 +85,10 @@ export interface MediaItem {
   mime: string;
   size: number;
   createdAt: string;
+  width?: number | null;
+  height?: number | null;
+  uploadedBy?: number | null;
+  uploadedByName?: string;
 }
 
 export interface SiteSettings {

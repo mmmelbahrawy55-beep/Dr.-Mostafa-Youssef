@@ -1,11 +1,12 @@
-import { ChevronDown, Search, ShieldCheck, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Eye, ExternalLink, Search, ShieldCheck, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { Spinner } from "../../components/ui/Spinner";
 import { useToast } from "../../components/ui/Toast";
 import { api, formatDateTime, formatEgp } from "../../lib/api";
 import { useSiteData } from "../../lib/site-data";
 import { cn } from "../../lib/utils";
-import { AdminPage, Badge, EmptyState } from "./components";
+import { AdminPage, Badge, EmptyState, Modal } from "./components";
 
 interface AuditEntry {
   id: number;
@@ -21,36 +22,28 @@ type Tone = "lemon" | "amber" | "rose" | "sky" | "neutral" | "violet";
 
 /**
  * Every action the server can write to the log, with the Arabic label shown in
- * the table and a plain-language explanation of what that action actually is.
+ * the table. The plain-language story of each entry is built by narrate().
  */
-const ACTIONS: Record<string, { label: string; tone: Tone; what: string }> = {
-  "payment.submitted": {
-    label: "رفع إيصال دفع",
-    tone: "sky",
-    what: "عميل رفع صورة إشعار تحويل (فودافون كاش أو إنستاباي) وطلب اشتراك. بيتسجل المبلغ وطريقة الدفع والباقة ونتيجة الفحص التلقائي.",
-  },
-  "payment.auto_approved": {
-    label: "تفعيل تلقائي لدفعة",
-    tone: "lemon",
-    what: "الإيصال اتحقق لوحده (المبلغ وطريقة الدفع مطابقين) فاتفعّل الاشتراك أوتوماتيك من غير مراجعة.",
-  },
-  "payment.approve": { label: "قبول دفعة", tone: "lemon", what: "المشرف راجع الإيصال ووافق يدويًا فاتفعّل الاشتراك." },
-  "payment.reject": { label: "رفض دفعة", tone: "rose", what: "المشرف رفض الإيصال: المبلغ غلط أو الصورة مش واضحة أو البيانات مش متطابقة." },
-  "customer.create": { label: "إضافة عميل", tone: "sky", what: "حساب عميل جديد اتعمل (من التسجيل أو بإضافة يدوية من اللوحة)." },
-  "customer.update": { label: "تعديل عميل", tone: "amber", what: "بيانات عميل اتغيرت: الاسم أو الموبايل أو الإيميل أو الباسورد." },
-  "subscription.grant": { label: "تفعيل اشتراك يدوي", tone: "lemon", what: "المشرف فعّل باقة لعميل من غير دفع (إهداء أو استثناء)." },
-  "subscription.status": { label: "تغيير حالة اشتراك", tone: "amber", what: "حالة اشتراك اتغيرت: نشط، ملغي، أو منتهي." },
-  "message.delete": { label: "حذف رسالة", tone: "rose", what: "رسالة تواصل من الموقع اتمسحت من صندوق الرسائل." },
-  "content.create": { label: "إضافة محتوى", tone: "sky", what: "عنصر جديد اتضاف للموقع: باقة، خدمة، مقال، سؤال، رأي، أو شهادة." },
-  "content.update": { label: "تعديل محتوى", tone: "amber", what: "عنصر موجود اتعدّل نصّه أو صورته أو سعره أو ظهوره." },
-  "content.delete": { label: "حذف محتوى", tone: "rose", what: "عنصر اتمسح نهائيًا من الموقع." },
-  "settings.update": { label: "تحديث إعدادات الموقع", tone: "amber", what: "بيانات التواصل أو محفظة الدفع أو صورة الهيرو أو إعدادات التفعيل اتغيّرت." },
-  "copy.update": { label: "تحديث نصوص الموقع", tone: "amber", what: "نصوص الواجهة (عربي/إنجليزي) اتعدّلت من صفحة نصوص الموقع." },
-  "media.upload": { label: "رفع صورة", tone: "sky", what: "صورة جديدة اترفعت لمكتبة الصور." },
-  "media.delete": { label: "حذف صورة", tone: "rose", what: "صورة اتمسحت من مكتبة الصور ومن التخزين." },
-  "export.payments": { label: "تصدير المدفوعات", tone: "violet", what: "تنزيل ملف CSV بكل المدفوعات." },
-  "export.customers": { label: "تصدير العملاء", tone: "violet", what: "تنزيل ملف CSV بكل العملاء." },
-  "export.subscriptions": { label: "تصدير الاشتراكات", tone: "violet", what: "تنزيل ملف CSV بكل الاشتراكات." },
+const ACTIONS: Record<string, { label: string; tone: Tone }> = {
+  "payment.submitted": { label: "رفع إيصال دفع", tone: "sky" },
+  "payment.auto_approved": { label: "تفعيل تلقائي لدفعة", tone: "lemon" },
+  "payment.approve": { label: "قبول دفعة", tone: "lemon" },
+  "payment.reject": { label: "رفض دفعة", tone: "rose" },
+  "customer.create": { label: "إضافة عميل", tone: "sky" },
+  "customer.update": { label: "تعديل عميل", tone: "amber" },
+  "subscription.grant": { label: "تفعيل اشتراك يدوي", tone: "lemon" },
+  "subscription.status": { label: "تغيير حالة اشتراك", tone: "amber" },
+  "message.delete": { label: "حذف رسالة", tone: "rose" },
+  "content.create": { label: "إضافة محتوى", tone: "sky" },
+  "content.update": { label: "تعديل محتوى", tone: "amber" },
+  "content.delete": { label: "حذف محتوى", tone: "rose" },
+  "settings.update": { label: "تحديث إعدادات الموقع", tone: "amber" },
+  "copy.update": { label: "تحديث نصوص الموقع", tone: "amber" },
+  "media.upload": { label: "رفع صورة", tone: "sky" },
+  "media.delete": { label: "حذف صورة", tone: "rose" },
+  "export.payments": { label: "تصدير المدفوعات", tone: "violet" },
+  "export.customers": { label: "تصدير العملاء", tone: "violet" },
+  "export.subscriptions": { label: "تصدير الاشتراكات", tone: "violet" },
 };
 
 const ENTITIES: Record<string, string> = {
@@ -91,6 +84,50 @@ function metaSummary(meta: Record<string, unknown>) {
     .join(" · ");
 }
 
+/** The admin page where the thing that was logged actually lives. */
+function previewTarget(entry: AuditEntry) {
+  if (entry.action.startsWith("payment")) return { href: "/admin/payments", label: "فتح المدفوعات" };
+  if (entry.action.startsWith("customer")) return { href: "/admin/customers", label: "فتح العملاء" };
+  if (entry.action.startsWith("subscription")) return { href: "/admin/subscriptions", label: "فتح الاشتراكات" };
+  if (entry.action.startsWith("content")) return { href: "/admin/content", label: "فتح محتوى الموقع" };
+  if (entry.action.startsWith("media")) return { href: "/admin/media", label: "فتح مكتبة الصور" };
+  if (entry.action.startsWith("message")) return { href: "/admin/messages", label: "فتح الرسائل" };
+  if (entry.action === "copy.update") return { href: "/admin/copy", label: "فتح نصوص الموقع" };
+  if (entry.action.startsWith("settings")) return { href: "/admin/settings", label: "فتح الإعدادات" };
+  if (entry.action.startsWith("export")) return { href: "/admin/payments", label: "فتح المدفوعات" };
+  return null;
+}
+
+function InfoRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex items-start justify-between gap-4 border-b border-white/5 py-2 last:border-0">
+      <span className="shrink-0 text-[11px] text-cream/45">{label}</span>
+      <span className="min-w-0 break-words text-end text-[11px] text-cream/75">{children}</span>
+    </div>
+  );
+}
+
+/** The actual receipt / uploaded image behind an entry, with a safe fallback. */
+function PreviewImage({ src, alt }: { src: string; alt: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <p className="rounded-xl border border-white/10 bg-white/[0.02] p-4 text-center text-[11px] text-cream/35">
+        الصورة مش متاحة — يمكن اتمسحت أو الرابط اتغير.
+      </p>
+    );
+  }
+  return (
+    <img
+      key={src}
+      src={src}
+      alt={alt}
+      onError={() => setFailed(true)}
+      className="max-h-64 w-full rounded-xl border border-white/10 bg-ink object-contain"
+    />
+  );
+}
+
 export default function AdminAudit() {
   const toast = useToast();
   const { data: site } = useSiteData();
@@ -101,6 +138,7 @@ export default function AdminAudit() {
   const [confirmId, setConfirmId] = useState<number | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [preview, setPreview] = useState<AuditEntry | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -178,6 +216,87 @@ export default function AdminAudit() {
     }
   };
 
+  /** One Arabic sentence that says exactly what happened in this entry. */
+  const narrate = (entry: AuditEntry) => {
+    const meta = entry.meta ?? {};
+    const who = entry.actorName || "النظام";
+    const amount = meta.amount ? formatEgp(Number(meta.amount)) : "";
+    const method = meta.method ? (METHODS[String(meta.method)] ?? String(meta.method)) : "";
+    const plan = meta.program ? programName(meta.program) : "";
+    const risk = Array.isArray(meta.risk) && meta.risk.length ? meta.risk.join("، ") : "";
+    const entityLabel = ENTITIES[entry.entity] ?? entry.entity;
+
+    switch (entry.action) {
+      case "payment.submitted":
+        return `${who} رفع إيصال دفع${amount ? ` بمبلغ ${amount}` : ""}${method ? ` عبر ${method}` : ""}${
+          plan ? ` للباقة «${plan}»` : ""
+        }، والصورة دخلت النظام ومستنية مراجعة${risk ? ` — الفحص التلقائي قال: ${risk}` : "."}`;
+      case "payment.auto_approved":
+        return `${who} رفع إيصال دفع${amount ? ` بمبلغ ${amount}` : ""}${method ? ` عبر ${method}` : ""}${
+          plan ? ` للباقة «${plan}»` : ""
+        }، والفحص التلقائي مطابق${risk ? ` (${risk})` : ""} فاتفعّل الاشتراك فورًا بدون مراجعة.`;
+      case "payment.approve":
+        return `${who} راجع الإيصال ووافق يدويًا${amount ? ` على مبلغ ${amount}` : ""}، فاتفعّل الاشتراك.${
+          meta.note ? ` الملاحظة: ${meta.note}` : ""
+        }`;
+      case "payment.reject":
+        return `${who} رفض الإيصال${amount ? ` بمبلغ ${amount}` : ""}.${meta.note ? ` السبب: ${meta.note}` : ""}`;
+      case "customer.create":
+        return `اتعمل حساب عميل جديد${meta.email ? ` بالإيميل ${meta.email}` : ""}.`;
+      case "customer.update": {
+        const fields = Array.isArray(meta.fields) ? meta.fields : [];
+        return `${who} عدّل بيانات العميل #${entry.entityId}${
+          fields.length ? ` (${fields.map((field) => FIELDS[String(field)] ?? String(field)).join("، ")})` : ""
+        }.`;
+      }
+      case "subscription.grant":
+        return `${who} فعّل باقة يدويًا للعميل #${meta.userId ?? "?"}${meta.programId ? ` — باقة «${programName(meta.programId)}»` : ""}${
+          meta.days ? ` لمدة ${meta.days} يوم` : ""
+        }، بدون عملية دفع.`;
+      case "subscription.status":
+        return `${who} غيّر حالة الاشتراك #${entry.entityId} إلى «${STATUSES[String(meta.status)] ?? String(meta.status ?? "")}».`;
+      case "message.delete":
+        return `${who} مسح رسالة واردة${meta.name ? ` من ${meta.name}` : ""}${meta.email ? ` (${meta.email})` : ""}.`;
+      case "content.create":
+        return `${who} أضاف عنصر جديد في «${entityLabel}» برقم #${entry.entityId}.`;
+      case "content.update":
+        return `${who} عدّل عنصر في «${entityLabel}» برقم #${entry.entityId}.`;
+      case "content.delete":
+        return `${who} مسح عنصر من «${entityLabel}» برقم #${entry.entityId}.`;
+      case "settings.update":
+        return `${who} حدّث إعدادات الموقع: بيانات التواصل، أرقام المحافظ، تعليمات الدفع، صورة الهيرو، أو الموافقة التلقائية.`;
+      case "copy.update":
+        return `${who} حدّث نصوص الواجهة (عربي/إنجليزي) من صفحة نصوص الموقع.`;
+      case "media.upload":
+        return `${who} رفع صورة جديدة إلى مكتبة الصور${meta.url ? `: ${meta.url}` : "."}`;
+      case "media.delete":
+        return `${who} مسح صورة من مكتبة الصور${meta.url ? `: ${meta.url}` : ` برقم #${entry.entityId}`}.`;
+      case "export.payments":
+      case "export.customers":
+      case "export.subscriptions":
+        return `${who} نزّل ملف CSV فيه ${entry.entityId} صف من «${entityLabel}».`;
+      default:
+        return `${who} نفّذ إجراء «${ACTIONS[entry.action]?.label ?? entry.action}» على ${entityLabel}${
+          entry.entityId ? ` #${entry.entityId}` : ""
+        }.`;
+    }
+  };
+
+  /** The picture behind an entry: the transfer receipt, or the uploaded file. */
+  const previewImage = (entry: AuditEntry) => {
+    if (entry.action.startsWith("payment") && entry.entityId) {
+      return { src: `/api/payments/${entry.entityId}/screenshot`, alt: "إيصال التحويل" };
+    }
+    // A deleted image is already gone from storage — loading it would only
+    // produce a 404, so we say so instead of showing a broken preview.
+    if (entry.action === "media.delete") return null;
+    if (entry.action === "media.upload") {
+      const url = String(entry.meta?.url ?? "");
+      if (url) return { src: url, alt: "الصورة" };
+    }
+    return null;
+  };
+
   const counts = useMemo(() => {
     const map = new Map<string, number>();
     for (const entry of entries) map.set(entry.action, (map.get(entry.action) ?? 0) + 1);
@@ -229,6 +348,8 @@ export default function AdminAudit() {
       setBusy(false);
     }
   };
+
+  const target = preview ? previewTarget(preview) : null;
 
   return (
     <AdminPage
@@ -320,12 +441,12 @@ export default function AdminAudit() {
                   <th>العنصر</th>
                   <th>التفاصيل</th>
                   <th>التاريخ</th>
-                  <th aria-label="حذف" />
+                  <th aria-label="إجراءات" />
                 </tr>
               </thead>
               <tbody>
                 {filtered.map((entry) => {
-                  const meta = ACTIONS[entry.action] ?? { label: entry.action, tone: "neutral" as const, what: "" };
+                  const meta = ACTIONS[entry.action] ?? { label: entry.action, tone: "neutral" as const };
                   return (
                     <tr key={entry.id}>
                       <td>
@@ -345,20 +466,31 @@ export default function AdminAudit() {
                       </td>
                       <td className="whitespace-nowrap text-[11px] text-cream/40">{formatDateTime(entry.createdAt)}</td>
                       <td className="text-end">
-                        <button
-                          type="button"
-                          onClick={() => void remove(entry.id)}
-                          className={cn(
-                            "inline-flex items-center justify-center gap-1 rounded-lg border px-2 py-1 text-[9px] font-bold",
-                            confirmId === entry.id
-                              ? "border-red-400/50 bg-red-500/15 text-red-100"
-                              : "border-white/10 text-cream/40 hover:border-red-400/40 hover:text-red-200"
-                          )}
-                          aria-label="حذف العملية"
-                        >
-                          <Trash2 className="size-3" aria-hidden />
-                          {confirmId === entry.id ? "تأكيد" : "حذف"}
-                        </button>
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setPreview(entry)}
+                            className="inline-flex items-center justify-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[9px] font-bold text-cream/55 hover:border-lemon/40 hover:text-lemon"
+                            aria-label="معاينة العملية"
+                          >
+                            <Eye className="size-3" aria-hidden />
+                            معاينة
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void remove(entry.id)}
+                            className={cn(
+                              "inline-flex items-center justify-center gap-1 rounded-lg border px-2 py-1 text-[9px] font-bold",
+                              confirmId === entry.id
+                                ? "border-red-400/50 bg-red-500/15 text-red-100"
+                                : "border-white/10 text-cream/40 hover:border-red-400/40 hover:text-red-200"
+                            )}
+                            aria-label="حذف العملية"
+                          >
+                            <Trash2 className="size-3" aria-hidden />
+                            {confirmId === entry.id ? "تأكيد" : "حذف"}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -369,28 +501,93 @@ export default function AdminAudit() {
         )}
       </div>
 
-      <details className="panel mt-4 group">
-        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-[11px] font-bold text-cream/70">
-          <span className="inline-flex items-center gap-2">
-            <ShieldCheck className="size-3.5 text-lemon/70" aria-hidden />
-            إيه اللي بيتسجل في السجل؟ ({Object.keys(ACTIONS).length} نوع إجراء)
-          </span>
-          <ChevronDown className="size-4 text-cream/40 transition-transform group-open:rotate-180" aria-hidden />
-        </summary>
-        <div className="grid gap-3 border-t border-white/10 p-4 sm:grid-cols-2">
-          {Object.entries(ACTIONS).map(([key, meta]) => (
-            <div key={key} className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
-              <div className="flex items-center gap-2">
-                <Badge tone={meta.tone}>{meta.label}</Badge>
-                <code className="font-latin text-[9px] text-cream/30" dir="ltr">
-                  {key}
-                </code>
+      <Modal
+        open={Boolean(preview)}
+        onClose={() => setPreview(null)}
+        title={preview ? (ACTIONS[preview.action]?.label ?? preview.action) : "معاينة العملية"}
+        description={preview ? `${formatDateTime(preview.createdAt)} · ${preview.actorName || "النظام"}` : undefined}
+        size="lg"
+        footer={
+          <>
+            {target && (
+              <Link
+                to={target.href}
+                onClick={() => setPreview(null)}
+                className="inline-flex items-center gap-1.5 rounded-full border border-white/15 px-4 py-2 text-[11px] font-bold text-cream/60 hover:border-lemon/40 hover:text-lemon"
+              >
+                <ExternalLink className="size-3.5" aria-hidden />
+                {target.label}
+              </Link>
+            )}
+            <button
+              type="button"
+              onClick={() => setPreview(null)}
+              className="rounded-full border border-white/15 px-4 py-2 text-[11px] font-bold text-cream/60"
+            >
+              إغلاق
+            </button>
+          </>
+        }
+      >
+        {preview && (
+          <div className="space-y-4">
+            <p className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-[13px] leading-relaxed text-cream/80">
+              {narrate(preview)}
+            </p>
+
+            {preview.action === "media.delete" && (
+              <p className="rounded-xl border border-white/10 bg-white/[0.02] p-4 text-[11px] leading-relaxed text-cream/45">
+                الصورة نفسها اتمسحت من الخادم وقت الحذف، فمش موجودة للمعاينة — الرابط المتسجّل فوق هو اللي كان متاح.
+              </p>
+            )}
+
+            {previewImage(preview) && (
+              <div>
+                <p className="mb-1.5 text-[10px] font-bold text-cream/45">الصورة المرتبطة</p>
+                <PreviewImage
+                  key={preview.id}
+                  src={previewImage(preview)!.src}
+                  alt={previewImage(preview)!.alt}
+                />
               </div>
-              <p className="mt-2 text-[11px] leading-relaxed text-cream/50">{meta.what}</p>
+            )}
+
+            <div className="grid gap-x-6 md:grid-cols-2">
+              <InfoRow label="بواسطة">{preview.actorName || "النظام"}</InfoRow>
+              <InfoRow label="التاريخ">{formatDateTime(preview.createdAt)}</InfoRow>
+              <InfoRow label="العنصر">{ENTITIES[preview.entity] ?? preview.entity}</InfoRow>
+              <InfoRow label="المعرّف">{preview.entityId || "—"}</InfoRow>
+              <InfoRow label="رقم العملية">#{preview.id}</InfoRow>
+              <InfoRow label="رمز العملية">
+                <span className="font-latin" dir="ltr">
+                  {preview.action}
+                </span>
+              </InfoRow>
             </div>
-          ))}
-        </div>
-      </details>
+
+            {describe(preview) !== "—" && (
+              <div>
+                <p className="mb-1.5 text-[10px] font-bold text-cream/45">تفاصيل إضافية</p>
+                <p className="rounded-xl border border-white/10 bg-white/[0.02] p-3 text-[11px] leading-relaxed text-cream/60">
+                  {describe(preview)}
+                </p>
+              </div>
+            )}
+
+            {Object.keys(preview.meta ?? {}).length > 0 && (
+              <details>
+                <summary className="cursor-pointer text-[10px] font-bold text-cream/45">البيانات الخام (JSON)</summary>
+                <pre
+                  className="mt-2 overflow-x-auto rounded-xl border border-white/10 bg-ink p-3 text-[10px] leading-relaxed text-cream/50"
+                  dir="ltr"
+                >
+                  {JSON.stringify(preview.meta, null, 2)}
+                </pre>
+              </details>
+            )}
+          </div>
+        )}
+      </Modal>
     </AdminPage>
   );
 }

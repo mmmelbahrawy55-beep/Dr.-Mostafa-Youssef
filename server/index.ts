@@ -43,6 +43,8 @@ import {
   releaseOnce,
   reserveOnce,
   listAudit,
+  clearAudit,
+  deleteAudit,
   listContent,
   listCustomerRows,
   listMedia,
@@ -1292,6 +1294,33 @@ app.get(
         createdAt: row.created_at,
       })),
     });
+  })
+);
+
+// Deleting an audit entry does not create a new audit entry on purpose: the
+// log is the thing being cleaned, so recording the cleanup inside it would
+// defeat the purpose. The admin session is still the only way in.
+app.delete(
+  "/api/admin/audit/:id",
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    const id = int(req.params.id);
+    if (!id) return void res.status(400).json({ error: "رقم العملية غير صحيح." });
+    const removed = await deleteAudit(id);
+    if (!removed) return void res.status(404).json({ error: "العملية مش موجودة." });
+    res.json({ ok: true });
+  })
+);
+
+app.delete(
+  "/api/admin/audit",
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    if (req.query.confirm !== "1") {
+      return void res.status(400).json({ error: "تأكيد الحذف غير مُرسل." });
+    }
+    const removed = await clearAudit();
+    res.json({ ok: true, removed });
   })
 );
 

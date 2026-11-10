@@ -467,6 +467,30 @@ for (const [name, path] of [
 const audit = await admin.get("/api/admin/audit");
 assert("admin audit log", audit.status === 200 && Array.isArray(audit.data?.entries), Object.keys(audit.data ?? {}).join(","));
 
+// --- audit cleanup ---
+const anonAudit = new Session();
+const anonClear = await anonAudit.delete("/api/admin/audit?confirm=1");
+assert("audit clear requires admin", anonClear.status === 401, `${anonClear.status}`);
+const auditEntries = audit.data?.entries ?? [];
+assert("audit has entries to clean", auditEntries.length >= 1, `${auditEntries.length} entries`);
+const auditTarget = auditEntries[0];
+if (auditTarget) {
+  const delEntry = await admin.delete(`/api/admin/audit/${auditTarget.id}`);
+  assert("admin deletes audit entry", delEntry.status === 200, `${delEntry.status}`);
+  const delAgain = await admin.delete(`/api/admin/audit/${auditTarget.id}`);
+  assert("deleting missing audit entry", delAgain.status === 404, `${delAgain.status}`);
+}
+const clearNoConfirm = await admin.delete("/api/admin/audit");
+assert("audit clear needs confirm flag", clearNoConfirm.status === 400, `${clearNoConfirm.status}`);
+const cleared = await admin.delete("/api/admin/audit?confirm=1");
+assert(
+  "admin clears audit log",
+  cleared.status === 200 && typeof cleared.data?.removed === "number",
+  `${cleared.status} ${JSON.stringify(cleared.data)}`
+);
+const auditAfter = await admin.get("/api/admin/audit");
+assert("audit log empty after clear", auditAfter.data?.entries?.length === 0, `${auditAfter.data?.entries?.length} left`);
+
 // --- logout ---
 const out = await customer.post("/api/auth/logout", {});
 assert("logout", out.status === 200);

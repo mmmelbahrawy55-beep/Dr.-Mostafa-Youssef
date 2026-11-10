@@ -321,6 +321,25 @@ export async function listAudit(limit = 200) {
   return rows.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, limit);
 }
 
+/**
+ * Deletes a single audit entry. Deleting an audit row never writes a new audit
+ * row, otherwise the log would re-populate itself with its own deletion.
+ */
+export async function deleteAudit(id: string | number): Promise<boolean> {
+  const rows = await allRows<Row>("audit_log");
+  const target = rows.find((row) => String(row.id) === String(id));
+  if (!target) return false;
+  await deleteRow("audit_log", target.id);
+  return true;
+}
+
+/** Clears the whole audit log and reports how many entries were removed. */
+export async function clearAudit(): Promise<number> {
+  const rows = await allRows<Row>("audit_log");
+  for (const row of rows) await deleteRow("audit_log", row.id);
+  return rows.length;
+}
+
 /* --------------------------------- content ---------------------------------- */
 
 function toContentItem(row: Row): ContentItem {

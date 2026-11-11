@@ -9,8 +9,23 @@ import {
   MAX_UPLOAD_BYTES,
   SHOT_DIR,
   UPLOAD_DIR,
+  allContentRows,
   allPayments,
   allSubscriptions,
+  bumpFailedAttempts,
+  bumpLoginChallenge,
+  clearFailedAttempts,
+  createLoginChallenge,
+  deleteLoginChallenge,
+  getFailedAttempts,
+  getLoginChallenge,
+  getSession,
+  listSessions,
+  listUsers,
+  revokeAllSessions,
+  revokeSession,
+  saveSession,
+  touchSession,
   countActiveSubscriptions,
   countExpiringSoon,
   countUnreadMessages,
@@ -77,6 +92,13 @@ import {
   sha256,
   str,
 } from "./security";
+import {
+  generateBackupCodes,
+  generateTotpSecret,
+  totpUri,
+  verifyBackupCode,
+  verifyTotp,
+} from "./totp";
 import type { ContentItem, PublicUser, SiteSettings } from "../shared/types";
 
 // Some runners inject PORT=0; fall back to the documented dev port instead of
@@ -95,7 +117,7 @@ function getSecret() {
   return secretPromise;
 }
 
-type Authed = Request & { user?: UserRow };
+type Authed = Request & { user?: UserRow; sessionId?: string };
 
 const app = express();
 app.disable("x-powered-by");
@@ -171,7 +193,28 @@ async function resolveUser(req: Request): Promise<UserRow | null> {
     if (!row || row.blocked) return null;
     // Password changes bump this so every previously issued cookie dies.
     if (Number(payload.ver ?? 0) !== Number(row.session_version ?? 0)) return null;
+    // Sessions are also records in Redis, so one device can be revoked without
+    // touching the others. Tokens issued before this change have no sid and
+    // are rejected, which also covers the old shared admin password.
+    const sid = String(payload.sid ?? "");
+    if (!sid) return null;
+    const session = await getSession(sid);
+    if (!session || Number(session.user_id) !== Number(row.id)) return null;
+    await touchSession(session);
+    (req as Authed).sessionId = sid;
     return row;
+  } catch {
+    return null;
+  }
+}
+
+/** Reads the sid from a valid cookie even when the session was just revoked. */
+async function sessionIdFromCookie(req: Request): Promise<string | null> {
+  const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+  if (!token) return null;
+  try {
+    const { payload } = await jwtVerify(token, await getSecret());
+    return payload.sid ? String(payload.sid) : null;
   } catch {
     return null;
   }
@@ -206,13 +249,24 @@ const requireAdmin = asyncRoute(async (req, res, next) => {
   next();
 });
 
-async function issueSession(res: Response, user: UserRow) {
-  const token = await new SignJWT({ role: user.role, ver: Number(user.session_version ?? 0) })
+async function issueSession(res: Response, user: UserRow, req?: Request) {
+  const sid = randomBytes(18).toString("base64url");
+  const token = await new SignJWT({ role: user.role, ver: Number(user.session_version ?? 0), sid })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(String(user.id))
     .setIssuedAt()
     .setExpirationTime("7d")
     .sign(await getSecret());
+
+  const created = nowIso();
+  await saveSession({
+    id: sid,
+    user_id: Number(user.id),
+    created_at: created,
+    last_seen: created,
+    ip: str(req?.ip ?? "", 60),
+    user_agent: str(req?.headers["user-agent"] ?? "", 300),
+  });
 
   const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
   res.setHeader(
@@ -254,6 +308,18 @@ async function limited(bucket: string, max: number, windowMs: number) {
   } catch {
     return false;
   }
+}
+
+/** Optional pagination: old clients that send no `page` still get the full list. */
+function pageSlice<T>(items: T[], req: Request) {
+  const page = Math.max(1, int(req.query.page, 1));
+  const pageSize = Math.min(100, Math.max(5, int(req.query.pageSize, 15)));
+  return {
+    items: items.slice((page - 1) * pageSize, page * pageSize),
+    total: items.length,
+    page,
+    pageSize,
+  };
 }
 
 /* --------------------------------- uploads -------------------------------- */
@@ -421,10 +487,13 @@ app.post(
       password_hash: hash,
     });
 
-    await issueSession(res, user);
+    await issueSession(res, user, req);
     res.status(201).json({ user: toPublicUser(user) });
   })
 );
+
+const LOCK_AFTER = 5;
+const LOCK_WINDOW_SECONDS = 15 * 60;
 
 app.post(
   "/api/auth/login",
@@ -438,9 +507,26 @@ app.post(
       return;
     }
 
+    const perDevice = `login:${email}:${ip}`;
+    const perAccount = `login-account:${email}`;
+    if (
+      (await getFailedAttempts(perDevice)) >= LOCK_AFTER ||
+      (await getFailedAttempts(perAccount)) >= LOCK_AFTER * 5
+    ) {
+      res.status(429).json({ error: "الحساب مقفول مؤقتًا بعد محاولات دخول فاشلة. حاول تاني بعد 15 دقيقة." });
+      return;
+    }
+
     const user = await findUserByEmail(email);
     if (!user || !checkPassword(password, user.password_salt, user.password_hash)) {
-      res.status(401).json({ error: "الإيميل أو الباسورد مش صح." });
+      const failures = await bumpFailedAttempts(perDevice, LOCK_WINDOW_SECONDS);
+      await bumpFailedAttempts(perAccount, LOCK_WINDOW_SECONDS);
+      res.status(401).json({
+        error:
+          failures >= LOCK_AFTER
+            ? "تم قفل المحاولات لمدة 15 دقيقة لحماية الحساب."
+            : "الإيميل أو الباسورد مش صح.",
+      });
       return;
     }
     if (user.blocked) {
@@ -448,15 +534,77 @@ app.post(
       return;
     }
 
-    await issueSession(res, user);
+    await clearFailedAttempts(perDevice);
+    await clearFailedAttempts(perAccount);
+
+    if (user.role === "admin" && user.totp_enabled) {
+      const challenge = await createLoginChallenge(user.id);
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ twoFactorRequired: true, challenge });
+      return;
+    }
+
+    await issueSession(res, user, req);
+    if (user.role === "admin") await logAudit(user, "auth.login", "user", user.id, { ip });
     res.json({ user: toPublicUser(user) });
   })
 );
 
-app.post("/api/auth/logout", (_req, res) => {
-  clearSession(res);
-  res.json({ ok: true });
-});
+/** Second step for an admin account protected by TOTP. */
+app.post(
+  "/api/auth/2fa",
+  asyncRoute(async (req, res) => {
+    const ip = req.ip ?? "unknown";
+    if (await limited(`2fa:${ip}`, 12, 60_000)) {
+      res.status(429).json({ error: "محاولات تحقق كتير. استنى دقيقة." });
+      return;
+    }
+
+    const challenge = str(req.body.challenge, 200);
+    const code = str(req.body.code, 20);
+    const record = await getLoginChallenge(challenge);
+    const user = record ? await findUserById(record.user_id) : undefined;
+
+    if (!record || !user || !user.totp_enabled || !user.totp_secret) {
+      res.status(401).json({ error: "انتهت صلاحية التحقق. سجل دخول من الأول." });
+      return;
+    }
+    if (record.attempts >= LOCK_AFTER || (await getFailedAttempts(`2fa:${user.id}`)) >= LOCK_AFTER) {
+      await deleteLoginChallenge(challenge);
+      res.status(429).json({ error: "محاولات تحقق كتير. سجل دخول تاني بعد 15 دقيقة." });
+      return;
+    }
+
+    if (!(await verifyAdminSecondFactor(user, code))) {
+      const attempts = await bumpLoginChallenge(challenge);
+      await bumpFailedAttempts(`2fa:${user.id}`, LOCK_WINDOW_SECONDS);
+      if (attempts >= LOCK_AFTER) await deleteLoginChallenge(challenge);
+      res.status(401).json({
+        error:
+          attempts >= LOCK_AFTER
+            ? "تم قفل المحاولات. سجل دخول تاني بعد 15 دقيقة."
+            : "كود التحقق مش صح. جرّب الكود الجديد من التطبيق.",
+      });
+      return;
+    }
+
+    await deleteLoginChallenge(challenge);
+    await clearFailedAttempts(`2fa:${user.id}`);
+    await issueSession(res, user, req);
+    await logAudit(user, "auth.login_2fa", "user", user.id, { ip });
+    res.json({ user: toPublicUser(user) });
+  })
+);
+
+app.post(
+  "/api/auth/logout",
+  asyncRoute(async (req, res) => {
+    const sid = await sessionIdFromCookie(req);
+    if (sid) await revokeSession(sid);
+    clearSession(res);
+    res.json({ ok: true });
+  })
+);
 
 app.get(
   "/api/auth/me",
@@ -515,8 +663,63 @@ app.patch(
     }
 
     const updated = (await updateUser(user.id, patch))!;
-    if (password) await issueSession(res, updated);
+    if (password) {
+      // A password change signs every device out, including this one, then
+      // immediately issues a fresh session for the current browser.
+      await revokeAllSessions(user.id);
+      await issueSession(res, updated, req);
+      await logAudit(updated, "account.password_change", "user", updated.id);
+    }
     res.json({ user: toPublicUser(updated) });
+  })
+);
+
+app.get(
+  "/api/account/sessions",
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const user = req.user!;
+    const rows = await listSessions(user.id);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      sessions: rows.map((row) => ({
+        id: row.id,
+        current: row.id === req.sessionId,
+        createdAt: row.created_at,
+        lastSeen: row.last_seen,
+        ip: row.ip,
+        userAgent: row.user_agent,
+      })),
+    });
+  })
+);
+
+app.post(
+  "/api/account/sessions/revoke-others",
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const user = req.user!;
+    const removed = await revokeAllSessions(user.id, req.sessionId);
+    await logAudit(user, "session.revoke_others", "user", user.id, { removed });
+    res.json({ ok: true, removed });
+  })
+);
+
+app.delete(
+  "/api/account/sessions/:id",
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const user = req.user!;
+    const id = str(req.params.id, 200);
+    const record = await getSession(id);
+    if (!record || Number(record.user_id) !== Number(user.id)) {
+      res.status(404).json({ error: "الجلسة مش موجودة." });
+      return;
+    }
+    await revokeSession(id);
+    await logAudit(user, "session.revoke", "user", user.id, { session: id.slice(0, 8) });
+    if (id === req.sessionId) clearSession(res);
+    res.json({ ok: true, current: id === req.sessionId });
   })
 );
 
@@ -772,6 +975,182 @@ app.get(
 
 /* ---------------------------------- admin --------------------------------- */
 
+/**
+ * Accepts a current TOTP code or a one-time backup code. A used backup code is
+ * removed from storage immediately, so a leaked list cannot be replayed.
+ */
+async function verifyAdminSecondFactor(user: UserRow, code: string): Promise<boolean> {
+  if (user.totp_secret && verifyTotp(user.totp_secret, code)) return true;
+  const hashes = safeJson<string[]>(user.totp_backup, []);
+  const index = verifyBackupCode(code, hashes);
+  if (index < 0) return false;
+  hashes.splice(index, 1);
+  await updateUser(user.id, { totp_backup: JSON.stringify(hashes) });
+  return true;
+}
+
+app.get(
+  "/api/admin/2fa",
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    const admin = (await findUserById(req.user!.id))!;
+    const hashes = safeJson<string[]>(admin.totp_backup, []);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      enabled: Boolean(admin.totp_enabled),
+      pending: Boolean(admin.totp_pending),
+      backupCodesLeft: hashes.length,
+      account: admin.email,
+    });
+  })
+);
+
+app.post(
+  "/api/admin/2fa/setup",
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    const admin = (await findUserById(req.user!.id))!;
+    if (admin.totp_enabled) {
+      res.status(409).json({ error: "التحقق بخطوتين مفعّل بالفعل. أوقفه الأول لو محتاج تعيد الإعداد." });
+      return;
+    }
+
+    const secret = generateTotpSecret();
+    await updateUser(admin.id, { totp_pending: secret });
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      secret,
+      uri: totpUri(secret, admin.email),
+      account: admin.email,
+      issuer: "Dr. Mostafa Youssef",
+    });
+  })
+);
+
+app.post(
+  "/api/admin/2fa/enable",
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    const admin = (await findUserById(req.user!.id))!;
+    const code = str(req.body.code, 20);
+    if (!admin.totp_pending) {
+      res.status(400).json({ error: "ابدأ إعداد التحقق الأول عشان يظهر الكود." });
+      return;
+    }
+    if (!verifyTotp(admin.totp_pending, code)) {
+      res.status(400).json({ error: "الكود مش صح. تأكد إن ساعة الموبايل مظبوطة وجرب الكود الجديد." });
+      return;
+    }
+
+    const { codes, hashes } = generateBackupCodes();
+    await updateUser(admin.id, {
+      totp_secret: admin.totp_pending,
+      totp_enabled: 1,
+      totp_pending: null,
+      totp_backup: JSON.stringify(hashes),
+    });
+    await logAudit(admin, "admin.2fa_enabled", "user", admin.id);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, backupCodes: codes });
+  })
+);
+
+app.post(
+  "/api/admin/2fa/disable",
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    const admin = (await findUserById(req.user!.id))!;
+    const password = String(req.body.password ?? "");
+    const code = str(req.body.code, 20);
+    if (!checkPassword(password, admin.password_salt, admin.password_hash)) {
+      res.status(400).json({ error: "الباسورد مش صح." });
+      return;
+    }
+    if (!admin.totp_enabled || !(await verifyAdminSecondFactor(admin, code))) {
+      res.status(400).json({ error: "كود التحقق مش صح." });
+      return;
+    }
+
+    await updateUser(admin.id, {
+      totp_secret: null,
+      totp_enabled: 0,
+      totp_pending: null,
+      totp_backup: null,
+    });
+    await logAudit(admin, "admin.2fa_disabled", "user", admin.id);
+    res.json({ ok: true });
+  })
+);
+
+app.post(
+  "/api/admin/2fa/backup-codes",
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    const admin = (await findUserById(req.user!.id))!;
+    const password = String(req.body.password ?? "");
+    const code = str(req.body.code, 20);
+    if (!checkPassword(password, admin.password_salt, admin.password_hash)) {
+      res.status(400).json({ error: "الباسورد مش صح." });
+      return;
+    }
+    if (!admin.totp_enabled || !(await verifyAdminSecondFactor(admin, code))) {
+      res.status(400).json({ error: "كود التحقق مش صح." });
+      return;
+    }
+
+    const { codes, hashes } = generateBackupCodes();
+    await updateUser(admin.id, { totp_backup: JSON.stringify(hashes) });
+    await logAudit(admin, "admin.2fa_backup_codes", "user", admin.id);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, backupCodes: codes });
+  })
+);
+
+/** Full JSON export (no binary screenshots) for off-site safekeeping. */
+app.get(
+  "/api/admin/backup",
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    const [settings, copy, users, content, payments, subscriptions, messages, media, audit] = await Promise.all([
+      getSettings(),
+      getCopyOverrides(),
+      listUsers(),
+      allContentRows(),
+      allPayments(),
+      allSubscriptions(),
+      listMessages(100_000),
+      listMedia(100_000),
+      listAudit(100_000),
+    ]);
+
+    const payload = {
+      version: 1,
+      exportedAt: nowIso(),
+      namespace: process.env.REDIS_PREFIX || "dm",
+      settings,
+      copy,
+      users,
+      content,
+      payments,
+      subscriptions,
+      messages,
+      media,
+      audit,
+    };
+
+    await logAudit(req.user, "backup.download", "backup", "", {
+      users: users.length,
+      payments: payments.length,
+    });
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="backup-${nowIso().slice(0, 10)}.json"`
+    );
+    res.setHeader("Cache-Control", "no-store");
+    res.json(payload);
+  })
+);
+
 app.get(
   "/api/admin/overview",
   requireAdmin,
@@ -845,8 +1224,23 @@ app.get(
   requireAdmin,
   asyncRoute(async (req, res) => {
     const status = str(req.query.status, 20);
-    const rows = (await allPayments()).filter((row) => !status || row.status === status).slice(0, 300);
-    res.json({ payments: await Promise.all(rows.map(mapPaymentWithUser)) });
+    const q = str(req.query.q, 80).toLowerCase();
+    const rows = (await allPayments())
+      .filter((row) => !status || row.status === status)
+      .filter((row) => {
+        if (!q) return true;
+        return [row.program_name, row.reference, row.sender, String(row.user_id)]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(q));
+      })
+      .slice(0, 300);
+    const payments = await Promise.all(rows.map(mapPaymentWithUser));
+
+    if (req.query.page === undefined) {
+      res.json({ payments });
+      return;
+    }
+    res.json({ payments: pageSlice(payments, req) });
   })
 );
 
@@ -883,7 +1277,12 @@ app.get(
   "/api/admin/customers",
   requireAdmin,
   asyncRoute(async (req, res) => {
-    res.json({ customers: await listCustomers(str(req.query.q, 80)) });
+    const customers = await listCustomers(str(req.query.q, 80));
+    if (req.query.page === undefined) {
+      res.json({ customers });
+      return;
+    }
+    res.json({ customers: pageSlice(customers, req) });
   })
 );
 
@@ -1044,11 +1443,19 @@ async function mapSubscriptionWithUser(row: any) {
 app.get(
   "/api/admin/subscriptions",
   requireAdmin,
-  asyncRoute(async (_req, res) => {
+  asyncRoute(async (req, res) => {
     await expireOldSubscriptions(nowIso());
-    const rows = (await allSubscriptions()).slice(0, 500);
+    const status = str(req.query.status, 20);
+    const rows = (await allSubscriptions())
+      .filter((row) => !status || row.status === status)
+      .slice(0, 500);
 
-    res.json({ subscriptions: await Promise.all(rows.map(mapSubscriptionWithUser)) });
+    const subscriptions = await Promise.all(rows.map(mapSubscriptionWithUser));
+    if (req.query.page === undefined) {
+      res.json({ subscriptions });
+      return;
+    }
+    res.json({ subscriptions: pageSlice(subscriptions, req) });
   })
 );
 

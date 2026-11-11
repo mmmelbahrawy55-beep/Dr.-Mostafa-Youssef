@@ -6,6 +6,7 @@ import {
   Files,
   Home,
   ImageIcon,
+  KeyRound,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -62,6 +63,7 @@ const SECTIONS: { title: string; items: AdminNavItem[] }[] = [
     title: "النظام",
     items: [
       { to: "/admin/settings", label: "الإعدادات", icon: Settings },
+      { to: "/admin/security", label: "الأمان", icon: KeyRound },
       { to: "/admin/audit", label: "سجل العمليات", icon: ShieldCheck },
     ],
   },

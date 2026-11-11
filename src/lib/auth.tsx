@@ -4,10 +4,16 @@ import type { AuthResponse, PublicUser } from "../../shared/types";
 import { api } from "./api";
 import { Spinner } from "../components/ui/Spinner";
 
+export interface TwoFactorChallenge {
+  twoFactorRequired: true;
+  challenge: string;
+}
+
 interface AuthContextValue {
   user: PublicUser | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<PublicUser>;
+  login: (email: string, password: string) => Promise<PublicUser | TwoFactorChallenge>;
+  completeTwoFactor: (challenge: string, code: string) => Promise<PublicUser>;
   register: (input: { name: string; email: string; phone: string; password: string }) => Promise<PublicUser>;
   logout: () => Promise<void>;
   refresh: () => Promise<PublicUser | null>;
@@ -49,7 +55,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {
-    const result = await api<AuthResponse>("/api/auth/login", { method: "POST", body: { email, password } });
+    const result = await api<AuthResponse | TwoFactorChallenge>("/api/auth/login", {
+      method: "POST",
+      body: { email, password },
+    });
+    if ("twoFactorRequired" in result) return result;
+    setUser(result.user);
+    return result.user;
+  }, []);
+
+  const completeTwoFactor = useCallback(async (challenge: string, code: string) => {
+    const result = await api<AuthResponse>("/api/auth/2fa", {
+      method: "POST",
+      body: { challenge, code },
+    });
     setUser(result.user);
     return result.user;
   }, []);
@@ -72,8 +91,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ user, loading, login, register, logout, refresh, setUser }),
-    [user, loading, login, register, logout, refresh]
+    () => ({ user, loading, login, completeTwoFactor, register, logout, refresh, setUser }),
+    [user, loading, login, completeTwoFactor, register, logout, refresh]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

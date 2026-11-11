@@ -1,56 +1,57 @@
-const unsplash = (id: string, width = 1200, height?: number) =>
-  `https://images.unsplash.com/photo-${id}?auto=format&fit=crop&w=${width}${height ? `&h=${height}` : ""}&q=80`;
-
-const portrait = (id: string, size = 320) =>
-  `https://images.unsplash.com/photo-${id}?auto=format&fit=crop&crop=faces&w=${size}&h=${size}&q=80`;
+/**
+ * All photography is bundled locally as compressed WebP, so the site does not
+ * depend on a third-party image host, works offline once cached, and keeps the
+ * largest contentful paint fast on mobile connections.
+ */
+const local = (name: string) => `/media/${name}.webp`;
 
 export const images = {
   /* Brand / hero */
-  hero: unsplash("1571019613454-1cb2f99b2d8b", 1200),
-  heroAlt: unsplash("1517836357463-d25dfeac3438", 1000),
-  heroGym: unsplash("1534438327276-14e5300c3a48", 1400),
-  about: unsplash("1526506118085-60ce8714f8c5", 1000),
-  aboutDetail: unsplash("1583454110551-21f2fa2afe61", 800),
-  coach: unsplash("1594381898411-846e7d193883", 1000),
+  hero: local("hero"),
+  heroAlt: local("hero-alt"),
+  heroGym: local("hero-gym"),
+  about: local("about"),
+  aboutDetail: local("about-detail"),
+  coach: local("coach"),
 
   /* Training */
-  gym: unsplash("1534438327276-14e5300c3a48", 1200),
-  gymDark: unsplash("1541534741688-6078c6bfb5c5", 1600),
-  gymMan: unsplash("1571731956672-f2b94d7dd0cb", 1000),
-  dumbbells: unsplash("1583454110551-21f2fa2afe61", 1200),
-  athlete: unsplash("1581009146145-b5ef050c2e1e", 1200),
-  woman: unsplash("1550345332-09e3ac987658", 1000),
-  stretching: unsplash("1518611012118-696072aa579a", 1000),
+  gym: local("gym"),
+  gymDark: local("gym-dark"),
+  gymMan: local("gym-man"),
+  dumbbells: local("dumbbells"),
+  athlete: local("athlete"),
+  woman: local("woman"),
+  stretching: local("stretching"),
 
   /* Nutrition */
-  food: unsplash("1546069901-ba9599a7e63c", 1200),
-  foodAlt: unsplash("1490645935967-10de6ba17061", 1000),
-  mealPrep: unsplash("1540497077202-7c8a3999166f", 1200),
-  salad: unsplash("1512621776951-a57141f2eefd", 1200),
-  protein: unsplash("1517836357463-d25dfeac3438", 1000),
-  kitchen: unsplash("1556911220-bff31c812dba", 1200),
+  food: local("food"),
+  foodAlt: local("food-alt"),
+  mealPrep: local("meal-prep"),
+  salad: local("salad"),
+  protein: local("hero-alt"),
+  kitchen: local("kitchen"),
 
   /* Programs */
-  programStart: unsplash("1490645935967-10de6ba17061", 1000),
-  programTransform: unsplash("1571019613454-1cb2f99b2d8b", 1000),
-  programElite: unsplash("1581009146145-b5ef050c2e1e", 1000),
+  programStart: local("food-alt"),
+  programTransform: local("hero"),
+  programElite: local("athlete"),
 
   /* Payments / account */
-  payment: unsplash("1556742049-0cfed4f6a45d", 1200),
-  phone: unsplash("1512941937669-90a1b58e7e9c", 1000),
-  dashboard: unsplash("1551288049-bebda4e38f71", 1400),
+  payment: local("payment"),
+  phone: local("phone"),
+  dashboard: local("dashboard"),
 
   /* Blog */
-  blogNutrition: unsplash("1498837167922-ddd27525d352", 1200),
-  blogTraining: unsplash("1517836357463-d25dfeac3438", 1200),
-  blogSleep: unsplash("1541781774459-bb2af2f05b55", 1200),
+  blogNutrition: local("blog-nutrition"),
+  blogTraining: local("blog-training"),
+  blogSleep: local("blog-sleep"),
 
   /* Avatars */
-  avatar1: portrait("1507003211169-0a1dd7228f2d"),
-  avatar2: portrait("1494790108377-be9c29b29330"),
-  avatar3: portrait("1500648767791-00dcc994a43e"),
-  avatar4: portrait("1534528741775-53994a69daeb"),
-  avatar5: portrait("1506794778202-cad84cf45f1d"),
+  avatar1: local("avatar-1"),
+  avatar2: local("avatar-2"),
+  avatar3: local("avatar-3"),
+  avatar4: local("avatar-4"),
+  avatar5: local("avatar-5"),
 } as const;
 
 /** Local, dependency-free fallback so no card ever shows a broken image. */

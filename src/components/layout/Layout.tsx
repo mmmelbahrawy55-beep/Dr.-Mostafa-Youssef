@@ -11,9 +11,12 @@ export function Layout() {
 
   return (
     <div className="flex min-h-screen flex-col">
+      <a href="#main-content" className="skip-link">
+        تخطَّ إلى المحتوى
+      </a>
       <ScrollProgress />
       <Header />
-      <main className="flex-1">
+      <main id="main-content" tabIndex={-1} className="flex-1 outline-none">
         <AnimatePresence mode="wait" initial={false}>
           <motion.div
             key={location.pathname}

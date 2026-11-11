@@ -16,6 +16,9 @@
     "build:server": "esbuild server/index.ts --bundle --platform=node --packages=external --format=esm --outfile=build/server.mjs --log-level=warning",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.server.json",
     "smoke": "node scripts/smoke.mjs",
+    "smoke:security": "node scripts/security-smoke.mjs",
+    "backup": "node scripts/backup.mjs",
+    "restore": "node scripts/restore.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

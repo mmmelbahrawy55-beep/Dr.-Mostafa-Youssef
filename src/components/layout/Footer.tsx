@@ -158,6 +158,9 @@ export function Footer() {
             <Link to="/terms" className="transition-colors hover:text-lemon">
               {t.footer.terms}
             </Link>
+            <Link to="/refund" className="transition-colors hover:text-lemon">
+              {t.footer.refund}
+            </Link>
             <span className="inline-flex items-center gap-1.5">
               <ShieldCheck className="size-3.5 text-lemon/60" aria-hidden />
               {t.footer.disclaimer}

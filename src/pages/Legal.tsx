@@ -2,7 +2,7 @@ import { PageHero } from "../components/ui/PageHero";
 import { Reveal } from "../components/ui/Reveal";
 import { useLang } from "../lib/i18n";
 
-export default function Legal({ docKey }: { docKey: "privacy" | "terms" }) {
+export default function Legal({ docKey }: { docKey: "privacy" | "terms" | "refund" }) {
   const { t } = useLang();
   const doc = t.legal[docKey];
 

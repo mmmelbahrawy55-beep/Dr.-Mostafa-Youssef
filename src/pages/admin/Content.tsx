@@ -4,12 +4,14 @@ import type { Collection, ContentItem } from "../../../shared/types";
 import { Spinner } from "../../components/ui/Spinner";
 import { useToast } from "../../components/ui/Toast";
 import { api } from "../../lib/api";
+import { starterProgramSystem } from "../../lib/program-system";
 import { useSiteData } from "../../lib/site-data";
 import { cn } from "../../lib/utils";
 import { AdminField, AdminPage, Badge, EmptyState, Modal } from "./components";
+import { ProgramSystemEditor } from "./ProgramSystemEditor";
 
 type Group = "common" | "ar" | "en";
-type FieldType = "text" | "textarea" | "number" | "boolean" | "lines" | "blocks";
+type FieldType = "text" | "textarea" | "number" | "boolean" | "lines" | "blocks" | "system";
 
 interface FieldDef {
   group: Group;
@@ -29,7 +31,11 @@ interface CollectionDef {
 }
 
 const COMMON: Record<Collection, Partial<ContentItem>> = {
-  programs: { common: { amount: 0, days: 30, image: "", popular: false }, ar: { name: "", tagline: "", features: [], note: "" }, en: { name: "", tagline: "", features: [], note: "" } },
+  programs: {
+    common: { amount: 0, days: 30, image: "", popular: false },
+    ar: { name: "", tagline: "", features: [], note: "", system: starterProgramSystem("ar") },
+    en: { name: "", tagline: "", features: [], note: "", system: starterProgramSystem("en") },
+  },
   services: { common: { icon: "nutrition", image: "" }, ar: { tag: "", title: "", desc: "", bullets: [] }, en: { tag: "", title: "", desc: "", bullets: [] } },
   testimonials: { common: { rating: 5 }, ar: { name: "", role: "", quote: "", result: "" }, en: { name: "", role: "", quote: "", result: "" } },
   results: { common: { before: "", after: "" }, ar: { name: "", duration: "", stat: "", summary: "" }, en: { name: "", duration: "", stat: "", summary: "" } },
@@ -53,10 +59,12 @@ const COLLECTIONS: CollectionDef[] = [
       { group: "ar", key: "tagline", label: "الوصف المختصر (عربي)", type: "text" },
       { group: "ar", key: "features", label: "المميزات (عربي)", type: "lines", hint: "كل ميزة في سطر." },
       { group: "ar", key: "note", label: "ملاحظة (عربي)", type: "textarea" },
+      { group: "ar", key: "system", label: "نظام البرنامج (عربي)", type: "system", hint: "ده اللي المشترك بيشوفه داخل حسابه." },
       { group: "en", key: "name", label: "Name (EN)", type: "text" },
       { group: "en", key: "tagline", label: "Tagline (EN)", type: "text" },
       { group: "en", key: "features", label: "Features (EN)", type: "lines", hint: "One per line." },
       { group: "en", key: "note", label: "Note (EN)", type: "textarea" },
+      { group: "en", key: "system", label: "Program system (EN)", type: "system", hint: "What subscribers see inside their account." },
     ],
     defaults: COMMON.programs,
   },
@@ -302,9 +310,9 @@ export default function AdminContent() {
       collection,
       sort: items.length,
       active: true,
-      common: { ...(def.defaults.common ?? {}) },
-      ar: { ...(def.defaults.ar ?? {}) },
-      en: { ...(def.defaults.en ?? {}) },
+      common: JSON.parse(JSON.stringify(def.defaults.common ?? {})),
+      ar: JSON.parse(JSON.stringify(def.defaults.ar ?? {})),
+      en: JSON.parse(JSON.stringify(def.defaults.en ?? {})),
     };
     setDraft(base);
     setIsNew(true);
@@ -530,7 +538,7 @@ export default function AdminContent() {
                   <div className="grid gap-3 sm:grid-cols-2">
                     {fields.map((field) => {
                       const raw = getValue(draft, group, field.key);
-                      const wide = field.type === "textarea" || field.type === "blocks";
+                      const wide = field.type === "textarea" || field.type === "blocks" || field.type === "system";
                       if (field.type === "boolean") {
                         return (
                           <label key={`${group}-${field.key}`} className="flex items-center gap-2 self-end py-2 text-[11px] font-semibold text-cream/60">
@@ -551,6 +559,16 @@ export default function AdminContent() {
                               label={field.label}
                               value={raw}
                               onChange={(blocks) => setValue(group, field.key, blocks)}
+                            />
+                          </div>
+                        );
+                      }
+                      if (field.type === "system") {
+                        return (
+                          <div key={`${group}-${field.key}`} className="sm:col-span-2">
+                            <ProgramSystemEditor
+                              value={raw}
+                              onChange={(next) => setValue(group, field.key, next)}
                             />
                           </div>
                         );

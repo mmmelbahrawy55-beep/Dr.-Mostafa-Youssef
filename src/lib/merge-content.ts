@@ -1,5 +1,6 @@
 import type { ContentItem, CopyOverrides, SiteData } from "../../shared/types";
 import type { Dict, IconKey, Lang, PostBlock } from "../content/types";
+import { ensureProgramSystem } from "./program-system";
 import { avatarFor } from "./images";
 
 const str = (value: unknown, fallback = "") => (typeof value === "string" ? value : fallback);
@@ -33,6 +34,12 @@ const localizedBlocks = (item: ContentItem, lang: Lang): PostBlock[] => {
 export const formatPrice = (amount: number) => new Intl.NumberFormat("en-US").format(Math.max(0, amount));
 
 const ICONS: IconKey[] = ["nutrition", "flame", "muscle", "coach", "sport", "lab"];
+
+const localizedSystem = (item: ContentItem, lang: Lang) => {
+  const chosen = (item[lang] as Record<string, unknown> | undefined)?.system;
+  const fallback = (item.ar as Record<string, unknown> | undefined)?.system;
+  return ensureProgramSystem(chosen ?? fallback);
+};
 
 /** Flattens a nested object into `section.key.0` paths so the admin copy editor can edit every line. */
 export function flattenStrings(value: unknown, prefix = "", output: Record<string, string> = {}) {
@@ -96,6 +103,7 @@ function applySiteContent(dict: Dict, lang: Lang, data: SiteData) {
         features: localizedArray(item, lang, "features"),
         popular: Boolean(item.common.popular),
         note: localized(item, lang, "note"),
+        system: localizedSystem(item, lang),
       };
     });
   }

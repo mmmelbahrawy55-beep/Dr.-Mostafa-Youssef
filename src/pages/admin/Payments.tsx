@@ -7,6 +7,7 @@ import { useToast } from "../../components/ui/Toast";
 import { api, formatDateTime, formatEgp } from "../../lib/api";
 import { cn } from "../../lib/utils";
 import { AdminField, AdminPage, Badge, EmptyState, Modal, PaymentStatus } from "./components";
+import { Pager } from "./Pager";
 
 const FILTERS = [
   { key: "", label: "الكل" },
@@ -26,6 +27,12 @@ export default function AdminPayments() {
   const [selected, setSelected] = useState<PaymentDTO | null>(null);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 12;
+
+  useEffect(() => {
+    setPage(1);
+  }, [status, query]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -53,6 +60,11 @@ export default function AdminPayments() {
         .some((value) => String(value).toLowerCase().includes(q));
     });
   }, [payments, query, status]);
+
+  const visible = useMemo(
+    () => filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [filtered, page]
+  );
 
   const counts = useMemo(() => {
     const result: Record<string, number> = {};
@@ -175,7 +187,7 @@ export default function AdminPayments() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((payment) => (
+                {visible.map((payment) => (
                   <tr key={payment.id} className="cursor-pointer" onClick={() => open(payment)}>
                     <td>
                       <p className="font-semibold text-cream/85">{payment.userName}</p>
@@ -213,6 +225,7 @@ export default function AdminPayments() {
                 ))}
               </tbody>
             </table>
+            <Pager page={page} pageSize={PAGE_SIZE} total={filtered.length} onPage={setPage} />
           </div>
         )}
       </div>

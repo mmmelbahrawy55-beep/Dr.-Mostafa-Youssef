@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Eye, EyeOff, Lock, Mail, ShieldCheck } from "lucide-react";
+import { ArrowRight, Eye, EyeOff, KeyRound, Lock, Mail, ShieldCheck } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { Logo, LogoBadge } from "../../components/ui/Logo";
@@ -11,10 +11,12 @@ import { useAuth } from "../../lib/auth";
  * Dedicated entry point for the control panel at `/admin`.
  *
  * Deliberately plain: this is a working screen for the clinic owner, not a
- * marketing page, so it carries no imagery or promotional copy.
+ * marketing page, so it carries no imagery or promotional copy. When the
+ * account has TOTP enabled, the password step is followed by a short code
+ * challenge; the password alone never creates a session.
  */
 export default function AdminLogin() {
-  const { login } = useAuth();
+  const { login, completeTwoFactor } = useAuth();
   const toast = useToast();
 
   const [email, setEmail] = useState("");
@@ -23,18 +25,20 @@ export default function AdminLogin() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
+  const [challenge, setChallenge] = useState("");
+  const [code, setCode] = useState("");
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setError("");
-
-    if (!email.trim() || !password) {
-      setError("اكتب الإيميل والباسورد.");
-      return;
-    }
-
     setBusy(true);
     try {
       const account = await login(email.trim(), password);
+      if ("twoFactorRequired" in account) {
+        setChallenge(account.challenge);
+        setCode("");
+        return;
+      }
       if (account.role !== "admin") {
         setError("الحساب ده مش أدمن. افتح حسابك العادي من صفحة تسجيل الدخول.");
         return;
@@ -42,6 +46,28 @@ export default function AdminLogin() {
       toast.success("أهلاً بلوحة التحكم 👋");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "حصل خطأ. جرب تاني.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitCode = async (event: FormEvent) => {
+    event.preventDefault();
+    setError("");
+    if (!/^\d{6}$/.test(code.replace(/\s/g, "")) && code.replace(/[^A-Za-z0-9]/g, "").length < 8) {
+      setError("اكتب كود الست أرقام من تطبيق المصادقة، أو كود احتياطي.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const account = await completeTwoFactor(challenge, code);
+      if (account.role !== "admin") {
+        setError("الحساب ده مش أدمن.");
+        return;
+      }
+      toast.success("أهلاً بلوحة التحكم 👋");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "الكود مش صح. جرب تاني.");
     } finally {
       setBusy(false);
     }
@@ -62,85 +88,149 @@ export default function AdminLogin() {
         <motion.div initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
           <div className="mt-10">
             <LogoBadge />
-            <h1 className="mt-5 text-3xl leading-tight md:text-4xl">لوحة تحكم الموقع.</h1>
+            <h1 className="mt-5 text-3xl leading-tight md:text-4xl">
+              {challenge ? "خطوة التحقق الأخيرة." : "لوحة تحكم الموقع."}
+            </h1>
             <p className="mt-3 text-sm leading-relaxed text-cream/55">
-              دخول الإدارة لاعتماد المدفوعات، متابعة العملاء، وتحديث محتوى الموقع.
+              {challenge
+                ? "افتح تطبيق المصادقة (Google Authenticator أو أي تطبيق TOTP) واكتب الكود الحالي. لو التطبيق مش معاك، استخدم كود احتياطي."
+                : "دخول الإدارة لاعتماد المدفوعات، متابعة العملاء، وتحديث محتوى الموقع."}
             </p>
           </div>
 
-          <form onSubmit={submit} className="mt-8 space-y-4">
-            <div>
-              <label htmlFor="admin-email" className="mb-1.5 block text-xs font-semibold text-cream/60">
-                إيميل الإدارة
-              </label>
-              <div className="relative">
-                <Mail
-                  className="pointer-events-none absolute start-3 top-1/2 size-4 -translate-y-1/2 text-cream/30"
-                  aria-hidden
-                />
-                <input
-                  id="admin-email"
-                  type="email"
-                  className="field ps-10"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  placeholder="admin@example.com"
-                  dir="ltr"
-                  autoComplete="username"
-                  required
-                />
+          {challenge ? (
+            <form onSubmit={submitCode} className="mt-8 space-y-4">
+              <div>
+                <label htmlFor="admin-code" className="mb-1.5 block text-xs font-semibold text-cream/60">
+                  كود التحقق
+                </label>
+                <div className="relative">
+                  <KeyRound
+                    className="pointer-events-none absolute start-3 top-1/2 size-4 -translate-y-1/2 text-cream/30"
+                    aria-hidden
+                  />
+                  <input
+                    id="admin-code"
+                    className="field ps-10 text-center font-mono text-lg tracking-[0.35em]"
+                    value={code}
+                    onChange={(event) => setCode(event.target.value)}
+                    placeholder="000000"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    autoFocus
+                    dir="ltr"
+                    required
+                  />
+                </div>
               </div>
-            </div>
 
-            <div>
-              <label htmlFor="admin-password" className="mb-1.5 block text-xs font-semibold text-cream/60">
-                الباسورد
-              </label>
-              <div className="relative">
-                <Lock
-                  className="pointer-events-none absolute start-3 top-1/2 size-4 -translate-y-1/2 text-cream/30"
-                  aria-hidden
-                />
-                <input
-                  id="admin-password"
-                  type={visible ? "text" : "password"}
-                  className="field ps-10 pe-12"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  placeholder="••••••••"
-                  dir="ltr"
-                  autoComplete="current-password"
-                  required
-                />
-                <button
-                  type="button"
-                  onClick={() => setVisible((prev) => !prev)}
-                  className="absolute end-3 top-1/2 -translate-y-1/2 text-cream/35 transition-colors hover:text-lemon"
-                  aria-label={visible ? "إخفاء الباسورد" : "إظهار الباسورد"}
+              {error && (
+                <p
+                  role="alert"
+                  className="rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-xs leading-relaxed text-red-200"
                 >
-                  {visible ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-                </button>
-              </div>
-            </div>
+                  {error}
+                </p>
+              )}
 
-            {error && (
-              <p
-                role="alert"
-                className="rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-xs leading-relaxed text-red-200"
+              <button
+                type="submit"
+                disabled={busy}
+                className="shine inline-flex w-full items-center justify-center gap-2 rounded-full bg-lemon px-6 py-4 text-sm font-bold text-ink transition-all hover:-translate-y-0.5 hover:shadow-[0_18px_45px_-14px_rgba(212,255,63,0.65)] disabled:translate-y-0 disabled:opacity-60"
               >
-                {error}
-              </p>
-            )}
+                {busy ? <Spinner className="text-ink" /> : <ShieldCheck className="size-4" aria-hidden />}
+                {busy ? "بنراجع الكود…" : "تأكيد الدخول"}
+              </button>
 
-            <button
-              type="submit"
-              disabled={busy}
-              className="shine inline-flex w-full items-center justify-center gap-2 rounded-full bg-lemon px-6 py-4 text-sm font-bold text-ink transition-all hover:-translate-y-0.5 hover:shadow-[0_18px_45px_-14px_rgba(212,255,63,0.65)] disabled:translate-y-0 disabled:opacity-60"
-            >
-              {busy ? <Spinner className="text-ink" /> : <ShieldCheck className="size-4" aria-hidden />}
-              {busy ? "لحظة…" : "دخول لوحة التحكم"}
-            </button>
-          </form>
+              <button
+                type="button"
+                onClick={() => {
+                  setChallenge("");
+                  setCode("");
+                  setPassword("");
+                  setError("");
+                }}
+                className="inline-flex w-full items-center justify-center gap-1.5 rounded-full border border-white/10 px-5 py-3 text-xs font-semibold text-cream/50 transition-colors hover:border-lemon/40 hover:text-lemon"
+              >
+                <ArrowRight className="size-3.5 rotate-180" aria-hidden />
+                رجوع لخطوة الباسورد
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={submit} className="mt-8 space-y-4">
+              <div>
+                <label htmlFor="admin-email" className="mb-1.5 block text-xs font-semibold text-cream/60">
+                  إيميل الإدارة
+                </label>
+                <div className="relative">
+                  <Mail
+                    className="pointer-events-none absolute start-3 top-1/2 size-4 -translate-y-1/2 text-cream/30"
+                    aria-hidden
+                  />
+                  <input
+                    id="admin-email"
+                    type="email"
+                    className="field ps-10"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    placeholder="admin@example.com"
+                    dir="ltr"
+                    autoComplete="username"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="admin-password" className="mb-1.5 block text-xs font-semibold text-cream/60">
+                  الباسورد
+                </label>
+                <div className="relative">
+                  <Lock
+                    className="pointer-events-none absolute start-3 top-1/2 size-4 -translate-y-1/2 text-cream/30"
+                    aria-hidden
+                  />
+                  <input
+                    id="admin-password"
+                    type={visible ? "text" : "password"}
+                    className="field ps-10 pe-12"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    placeholder="••••••••"
+                    dir="ltr"
+                    autoComplete="current-password"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setVisible((prev) => !prev)}
+                    className="absolute end-3 top-1/2 -translate-y-1/2 text-cream/35 transition-colors hover:text-lemon"
+                    aria-label={visible ? "إخفاء الباسورد" : "إظهار الباسورد"}
+                  >
+                    {visible ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {error && (
+                <p
+                  role="alert"
+                  className="rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-xs leading-relaxed text-red-200"
+                >
+                  {error}
+                </p>
+              )}
+
+              <button
+                type="submit"
+                disabled={busy}
+                className="shine inline-flex w-full items-center justify-center gap-2 rounded-full bg-lemon px-6 py-4 text-sm font-bold text-ink transition-all hover:-translate-y-0.5 hover:shadow-[0_18px_45px_-14px_rgba(212,255,63,0.65)] disabled:translate-y-0 disabled:opacity-60"
+              >
+                {busy ? <Spinner className="text-ink" /> : <ShieldCheck className="size-4" aria-hidden />}
+                {busy ? "لحظة…" : "دخول لوحة التحكم"}
+              </button>
+            </form>
+          )}
 
           <div className="mt-8 flex items-center justify-center gap-2 text-[11px] text-cream/30">
             <ShieldCheck className="size-3.5 text-lemon/60" aria-hidden />

@@ -22,6 +22,7 @@ export function Photo({
   aspect,
   overlay = false,
   loading = "lazy",
+  decoding = "async",
   ...rest
 }: PhotoProps) {
   const [failed, setFailed] = useState(false);
@@ -34,6 +35,7 @@ export function Photo({
         src={source}
         alt={alt}
         loading={loading}
+        decoding={decoding}
         onError={() => setFailed(true)}
         className={cn("relative size-full object-cover", className)}
         {...rest}

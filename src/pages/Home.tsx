@@ -308,6 +308,10 @@ export default function Home() {
                 includesLabel={t.programsPage.includes}
                 ctaLabel={t.programsPage.cta}
                 ctaTo={`/subscribe/${program.contentId ?? program.id}`}
+                weeksLabel={t.programsPage.weeks}
+                workoutsLabel={t.programsPage.workouts}
+                mealsLabel={t.programsPage.meals}
+                daysLabel={lang === "ar" ? "يوم" : "days"}
               />
             </Reveal>
           ))}
@@ -386,6 +390,8 @@ export default function Home() {
               beforeLabel={t.resultsPage.before}
               afterLabel={t.resultsPage.after}
               name={featured.name}
+              stat={featured.stat}
+              hint={t.resultsPage.drag}
             />
           </Reveal>
           <div>

@@ -115,6 +115,14 @@ export default function Auth({ mode }: { mode: Mode }) {
       const account = isRegister
         ? await register({ name: name.trim(), email: email.trim(), phone: phone.trim(), password })
         : await login(email.trim(), password);
+      if ("twoFactorRequired" in account) {
+        setError(
+          ar
+            ? "الحساب ده محمي بالتحقق بخطوتين — سجّل الدخول من صفحة /admin وأكمل الكود."
+            : "This account uses two-factor authentication — sign in at /admin and enter your code."
+        );
+        return;
+      }
       toast.success(
         isRegister
           ? ar

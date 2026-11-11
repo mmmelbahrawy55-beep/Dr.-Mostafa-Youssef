@@ -98,6 +98,39 @@ export interface Program {
   features: string[];
   popular: boolean;
   note: string;
+  system: ProgramSystem;
+}
+
+export interface ProgramWeek {
+  title: string;
+  focus: string;
+  nutrition: string;
+  training: string;
+  habits: string[];
+  checkIn: string;
+}
+
+export interface ProgramMeal {
+  meal: string;
+  idea: string;
+}
+
+export interface ProgramWorkout {
+  day: string;
+  focus: string;
+  exercises: string[];
+}
+
+export interface ProgramSystem {
+  summary: string;
+  level: string;
+  checkInEveryDays: number;
+  outcomes: string[];
+  startSteps: string[];
+  weeks: ProgramWeek[];
+  meals: ProgramMeal[];
+  workouts: ProgramWorkout[];
+  guidelines: string[];
 }
 
 export interface ProgramsPage extends PageIntro {
@@ -110,6 +143,16 @@ export interface ProgramsPage extends PageIntro {
   compareTitle: string;
   compareRows: { label: string; values: [string, string, string] }[];
   faqs: { q: string; a: string }[];
+  inside: string;
+  insideSub: string;
+  weeks: string;
+  workouts: string;
+  meals: string;
+  checkInEvery: string;
+  sampleWeek: string;
+  fullPlanNote: string;
+  level: string;
+  explore: string;
 }
 
 export interface Transform {
@@ -250,6 +293,7 @@ export interface Footer {
   disclaimer: string;
   privacy: string;
   terms: string;
+  refund: string;
 }
 
 export interface LegalDoc {
@@ -311,7 +355,7 @@ export interface Dict {
   posts: Post[];
   contact: Contact;
   footer: Footer;
-  legal: { privacy: LegalDoc; terms: LegalDoc };
+  legal: { privacy: LegalDoc; terms: LegalDoc; refund: LegalDoc };
   notFound: { title: string; text: string; cta: string };
   finalCta: { kicker: string; title: string; text: string; primary: string; secondary: string };
 }

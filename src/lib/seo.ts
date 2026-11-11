@@ -61,6 +61,10 @@ const PAGES: Record<string, { ar: Meta; en: Meta }> = {
     ar: { title: "الشروط والأحكام | د. مصطفى يوسف", description: "شروط استخدام الموقع والاشتراكات والمدفوعات وإخلاء المسؤولية الطبي." },
     en: { title: "Terms & conditions | Dr. Mostafa Youssef", description: "Terms for using the site and plans, payments, and the medical disclaimer." },
   },
+  "/refund": {
+    ar: { title: "سياسة الاسترجاع | د. مصطفى يوسف", description: "شروط استرداد قيمة الباقات، والمدة، والاستثناءات، وطريقة تقديم الطلب." },
+    en: { title: "Refund policy | Dr. Mostafa Youssef", description: "Refund terms for plans, timelines, exceptions and how to request a refund." },
+  },
   "/login": {
     ar: { title: "تسجيل الدخول | د. مصطفى يوسف", description: "ادخل على حسابك لمتابعة باقتك ومدفوعاتك." },
     en: { title: "Sign in | Dr. Mostafa Youssef", description: "Sign in to track your plan, payments and progress." },

@@ -7,6 +7,7 @@ import { api, daysBetween, formatDate } from "../../lib/api";
 import { useLang } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
 import { AdminField, AdminPage, Badge, EmptyState, Modal, PaymentStatus } from "./components";
+import { Pager } from "./Pager";
 
 const FILTERS = [
   { key: "", label: "الكل" },
@@ -27,6 +28,12 @@ export default function AdminSubscriptions() {
   const [programId, setProgramId] = useState("");
   const [days, setDays] = useState("");
   const [busy, setBusy] = useState(false);
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 12;
+
+  useEffect(() => {
+    setPage(1);
+  }, [filter]);
 
   const load = useCallback(async () => {
     try {
@@ -48,6 +55,11 @@ export default function AdminSubscriptions() {
   }, [load]);
 
   const filtered = useMemo(() => (filter ? items.filter((item) => item.status === filter) : items), [items, filter]);
+  const visible = useMemo(
+    () => filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [filtered, page]
+  );
+
   const activeCount = items.filter((item) => item.status === "active" && new Date(item.endsAt).getTime() > Date.now()).length;
   const expiring = items.filter((item) => {
     if (item.status !== "active") return false;
@@ -170,7 +182,7 @@ export default function AdminSubscriptions() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((item) => {
+                {visible.map((item) => {
                   const left = daysBetween(new Date(), item.endsAt);
                   const isActive = item.status === "active" && new Date(item.endsAt).getTime() > Date.now();
                   return (
@@ -227,6 +239,7 @@ export default function AdminSubscriptions() {
                 })}
               </tbody>
             </table>
+            <Pager page={page} pageSize={PAGE_SIZE} total={filtered.length} onPage={setPage} />
           </div>
         )}
       </div>

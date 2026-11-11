@@ -182,6 +182,120 @@ export async function rateCount(bucket: string, seconds: number): Promise<number
   return count;
 }
 
+/* --------------------------------- sessions -------------------------------- */
+
+const sessionKey = (id: string) => `${PREFIX}sess:${id}`;
+const userSessionsKey = (userId: number) => `${PREFIX}usess:${userId}`;
+const challengeKey = (id: string) => `${PREFIX}chal:${id}`;
+const failKey = (bucket: string) => `${PREFIX}fail:${bucket}`;
+
+export const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+export type SessionRecord = {
+  id: string;
+  user_id: number;
+  created_at: string;
+  last_seen: string;
+  ip: string;
+  user_agent: string;
+};
+
+/**
+ * Sessions are server-side records, not just signed cookies, so a stolen or
+ * forgotten device can be revoked without invalidating every other login.
+ */
+export async function saveSession(record: SessionRecord): Promise<void> {
+  await redis.set(sessionKey(record.id), JSON.stringify(record), { ex: SESSION_TTL_SECONDS });
+  await redis.sadd(userSessionsKey(record.user_id), record.id);
+  await redis.expire(userSessionsKey(record.user_id), SESSION_TTL_SECONDS);
+}
+
+export async function getSession(id: string): Promise<SessionRecord | undefined> {
+  return parseRow<SessionRecord>(await redis.get(sessionKey(id)));
+}
+
+/** Sliding expiry, but writes at most once every five minutes per session. */
+export async function touchSession(record: SessionRecord): Promise<void> {
+  if (Date.now() - Date.parse(record.last_seen) < 5 * 60_000) return;
+  const next = { ...record, last_seen: nowIso() };
+  await redis.set(sessionKey(record.id), JSON.stringify(next), { ex: SESSION_TTL_SECONDS });
+}
+
+export async function revokeSession(id: string): Promise<void> {
+  const record = await getSession(id);
+  await redis.del(sessionKey(id));
+  if (record) await redis.srem(userSessionsKey(record.user_id), id);
+}
+
+export async function listSessions(userId: number): Promise<SessionRecord[]> {
+  const ids = ((await redis.smembers(userSessionsKey(userId))) ?? []) as string[];
+  const records = await Promise.all(ids.map((id) => getSession(id)));
+  const live: SessionRecord[] = [];
+  for (let index = 0; index < ids.length; index += 1) {
+    const record = records[index];
+    if (record) live.push(record);
+    else await redis.srem(userSessionsKey(userId), ids[index]);
+  }
+  return live.sort((a, b) => String(b.last_seen).localeCompare(String(a.last_seen)));
+}
+
+export async function revokeAllSessions(userId: number, exceptId?: string): Promise<number> {
+  const ids = ((await redis.smembers(userSessionsKey(userId))) ?? []) as string[];
+  let removed = 0;
+  for (const id of ids) {
+    if (id === exceptId) continue;
+    await redis.del(sessionKey(id));
+    await redis.srem(userSessionsKey(userId), id);
+    removed += 1;
+  }
+  return removed;
+}
+
+/* ------------------------------ login challenges --------------------------- */
+
+export type LoginChallenge = { user_id: number; attempts: number };
+
+/** Short-lived proof that the password step passed, awaiting the TOTP code. */
+export async function createLoginChallenge(userId: number): Promise<string> {
+  const id = randomBytes(24).toString("base64url");
+  await redis.set(challengeKey(id), JSON.stringify({ user_id: userId, attempts: 0 }), { ex: 300 });
+  return id;
+}
+
+export async function getLoginChallenge(id: string): Promise<LoginChallenge | undefined> {
+  return parseRow<LoginChallenge>(await redis.get(challengeKey(id)));
+}
+
+export async function bumpLoginChallenge(id: string): Promise<number> {
+  const record = await getLoginChallenge(id);
+  if (!record) return 0;
+  record.attempts += 1;
+  await redis.set(challengeKey(id), JSON.stringify(record), { ex: 300 });
+  return record.attempts;
+}
+
+export async function deleteLoginChallenge(id: string): Promise<void> {
+  await redis.del(challengeKey(id));
+}
+
+/* ------------------------------ failed attempts ---------------------------- */
+
+/** Persistent counter used for account lockout (separate from request limits). */
+export async function getFailedAttempts(bucket: string): Promise<number> {
+  return Number(await redis.get(failKey(bucket))) || 0;
+}
+
+export async function bumpFailedAttempts(bucket: string, seconds = 900): Promise<number> {
+  const key = failKey(bucket);
+  const count = Number(await redis.incr(key));
+  if (count === 1) await redis.expire(key, seconds);
+  return count;
+}
+
+export async function clearFailedAttempts(bucket: string): Promise<void> {
+  await redis.del(failKey(bucket));
+}
+
 export async function putRow(table: string, row: Row): Promise<void> {
   await redis.hset(tableKey(table), { [String(row.id)]: JSON.stringify(row) });
 }
@@ -397,6 +511,11 @@ export type UserRow = {
   password_hash: string;
   blocked: number;
   session_version?: number;
+  totp_secret?: string | null;
+  totp_pending?: string | null;
+  totp_enabled?: number;
+  /** JSON array of SHA-256 hashes; the plaintext codes are shown once. */
+  totp_backup?: string | null;
   created_at: string;
 };
 
@@ -412,6 +531,10 @@ export async function findUserByEmail(email: string): Promise<UserRow | undefine
 export async function findAdmin(): Promise<UserRow | undefined> {
   const rows = await allRows<UserRow>("users");
   return rows.find((row) => row.role === "admin");
+}
+
+export async function listUsers(): Promise<UserRow[]> {
+  return allRows<UserRow>("users");
 }
 
 export async function createUser(input: {
@@ -815,12 +938,19 @@ async function seedContent() {
         popular: program.popular,
         image: programImages[index] ?? images.gym,
       },
-      ar: { name: program.name, tagline: program.tagline, features: program.features, note: program.note },
+      ar: {
+        name: program.name,
+        tagline: program.tagline,
+        features: program.features,
+        note: program.note,
+        system: program.system,
+      },
       en: {
         name: other?.name ?? program.name,
         tagline: other?.tagline ?? program.tagline,
         features: other?.features ?? program.features,
         note: other?.note ?? program.note,
+        system: other?.system ?? program.system,
       },
     });
   }
@@ -928,6 +1058,10 @@ async function seedContent() {
   }
 }
 
+export async function allContentRows(): Promise<Row[]> {
+  return allRows("content_items");
+}
+
 async function seedUniqueClaimMarkers() {
   // Backfill the atomic claim markers for receipts submitted before the
   // reservation keys existed, so an old screenshot can never be reused.
@@ -938,13 +1072,111 @@ async function seedUniqueClaimMarkers() {
   }
 }
 
+/* --------------------------- local image migration ------------------------- */
+
+/**
+ * Photography used to be hot-linked from Unsplash. Existing rows still carry
+ * those URLs, so a cold start rewrites them to the bundled WebP files. The
+ * migration is idempotent and covers the hero setting plus content covers.
+ */
+const LOCAL_IMAGE_BY_PHOTO: Record<string, string> = {
+  "1571019613454-1cb2f99b2d8b": "/media/hero.webp",
+  "1517836357463-d25dfeac3438": "/media/hero-alt.webp",
+  "1534438327276-14e5300c3a48": "/media/gym.webp",
+  "1526506118085-60ce8714f8c5": "/media/about.webp",
+  "1583454110551-21f2fa2afe61": "/media/dumbbells.webp",
+  "1594381898411-846e7d193883": "/media/coach.webp",
+  "1541534741688-6078c6bfb5c5": "/media/gym-dark.webp",
+  "1571731956672-f2b94d7dd0cb": "/media/gym-man.webp",
+  "1581009146145-b5ef050c2e1e": "/media/athlete.webp",
+  "1550345332-09e3ac987658": "/media/woman.webp",
+  "1518611012118-696072aa579a": "/media/stretching.webp",
+  "1546069901-ba9599a7e63c": "/media/food.webp",
+  "1490645935967-10de6ba17061": "/media/food-alt.webp",
+  "1540497077202-7c8a3999166f": "/media/meal-prep.webp",
+  "1512621776951-a57141f2eefd": "/media/salad.webp",
+  "1556911220-bff31c812dba": "/media/kitchen.webp",
+  "1556742049-0cfed4f6a45d": "/media/payment.webp",
+  "1512941937669-90a1b58e7e9c": "/media/phone.webp",
+  "1551288049-bebda4e38f71": "/media/dashboard.webp",
+  "1498837167922-ddd27525d352": "/media/blog-nutrition.webp",
+  "1541781774459-bb2af2f05b55": "/media/blog-sleep.webp",
+  "1507003211169-0a1dd7228f2d": "/media/avatar-1.webp",
+  "1494790108377-be9c29b29330": "/media/avatar-2.webp",
+  "1500648767791-00dcc994a43e": "/media/avatar-3.webp",
+  "1534528741775-53994a69daeb": "/media/avatar-4.webp",
+  "1506794778202-cad84cf45f1d": "/media/avatar-5.webp",
+};
+
+function migratedImage(value: unknown): string | null {
+  if (typeof value !== "string" || value.startsWith("/media/")) return null;
+  const match = /photo-([0-9]+-[a-z0-9]+)/i.exec(value);
+  if (!match) return null;
+  return LOCAL_IMAGE_BY_PHOTO[match[1]] ?? "/media/hero.webp";
+}
+
+async function migrateLocalImages() {
+  const settings = await getSettings();
+  const hero = migratedImage(settings.hero.image);
+  if (hero) {
+    settings.hero.image = hero;
+    await saveSettings(settings);
+  }
+
+  for (const row of await allRows<Row>("content_items")) {
+    const common = safeJson<Record<string, unknown>>(row.common, {});
+    let touched = false;
+    for (const key of ["image", "cover", "before", "after"]) {
+      const next = migratedImage(common[key]);
+      if (next) {
+        common[key] = next;
+        touched = true;
+      }
+    }
+    if (touched) await putRow("content_items", { ...row, common: JSON.stringify(common) });
+  }
+}
+
+/* --------------------------- program system migration ---------------------- */
+
+/**
+ * The plan content gained a structured program (weeks, meals, workouts). Rows
+ * seeded before that change have no `system` key, so backfill it from the
+ * bundled defaults. Items that already carry a system — including plans an
+ * admin created — are never overwritten.
+ */
+async function migrateProgramSystems() {
+  for (const row of await allRows<Row>("content_items")) {
+    if (String(row.collection) !== "programs") continue;
+    const seedAr = ar.programs.find((program) => `prog-${program.id}` === String(row.id));
+    if (!seedAr) continue;
+    const seedEn = en.programs.find((program) => program.id === seedAr.id) ?? seedAr;
+    const arData = safeJson<Record<string, unknown>>(row.ar, {});
+    const enData = safeJson<Record<string, unknown>>(row.en, {});
+    let touched = false;
+    if (!("system" in arData)) {
+      arData.system = seedAr.system;
+      touched = true;
+    }
+    if (!("system" in enData)) {
+      enData.system = seedEn.system;
+      touched = true;
+    }
+    if (touched) {
+      await putRow("content_items", { ...row, ar: JSON.stringify(arData), en: JSON.stringify(enData) });
+    }
+  }
+}
+
 async function seed() {
   await seedAdmin();
   await seedContent();
+  await migrateProgramSystems();
   await seedUniqueClaimMarkers();
   if (!(await getSetting<SiteSettings | null>("site", null))) {
     await saveSettings(defaultSettings);
   }
+  await migrateLocalImages();
 }
 
 /** Runs once per cold start; idempotent, so concurrent instances are safe. */

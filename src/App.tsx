@@ -33,6 +33,7 @@ const AdminMedia = lazy(() => import("./pages/admin/Media"));
 const AdminMessages = lazy(() => import("./pages/admin/Messages"));
 const AdminOverview = lazy(() => import("./pages/admin/Overview"));
 const AdminPayments = lazy(() => import("./pages/admin/Payments"));
+const AdminSecurity = lazy(() => import("./pages/admin/Security"));
 const AdminSettings = lazy(() => import("./pages/admin/Settings"));
 const AdminSubscriptions = lazy(() => import("./pages/admin/Subscriptions"));
 
@@ -93,6 +94,7 @@ export default function App() {
                   />
                   <Route path="privacy" element={<Legal docKey="privacy" />} />
                   <Route path="terms" element={<Legal docKey="terms" />} />
+                  <Route path="refund" element={<Legal docKey="refund" />} />
                   <Route path="*" element={<NotFound />} />
                 </Route>
 
@@ -107,6 +109,7 @@ export default function App() {
                   <Route path="media" element={<AdminMedia />} />
                   <Route path="settings" element={<AdminSettings />} />
                   <Route path="audit" element={<AdminAudit />} />
+                  <Route path="security" element={<AdminSecurity />} />
                 </Route>
               </Routes>
             </Suspense>

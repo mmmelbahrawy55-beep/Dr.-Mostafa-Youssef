@@ -20,6 +20,7 @@ import { api, formatDate, formatDateTime, formatEgp } from "../../lib/api";
 import { useLang } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
 import { AdminField, AdminPage, Badge, EmptyState, Modal, PaymentStatus } from "./components";
+import { Pager } from "./Pager";
 
 export default function AdminCustomers() {
   const toast = useToast();
@@ -27,6 +28,12 @@ export default function AdminCustomers() {
   const [customers, setCustomers] = useState<AdminCustomer[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 12;
+
+  useEffect(() => {
+    setPage(1);
+  }, [query]);
 
   const [detail, setDetail] = useState<CustomerDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -179,6 +186,11 @@ export default function AdminCustomers() {
     }
   };
 
+  const visible = useMemo(
+    () => customers.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [customers, page]
+  );
+
   const totals = useMemo(
     () => ({
       count: customers.length,
@@ -262,7 +274,7 @@ export default function AdminCustomers() {
                 </tr>
               </thead>
               <tbody>
-                {customers.map((customer) => (
+                {visible.map((customer) => (
                   <tr key={customer.id} className="cursor-pointer" onClick={() => void openDetail(customer.id)}>
                     <td>
                       <div className="flex items-center gap-2.5">
@@ -295,6 +307,7 @@ export default function AdminCustomers() {
                 ))}
               </tbody>
             </table>
+            <Pager page={page} pageSize={PAGE_SIZE} total={customers.length} onPage={setPage} />
           </div>
         )}
       </div>

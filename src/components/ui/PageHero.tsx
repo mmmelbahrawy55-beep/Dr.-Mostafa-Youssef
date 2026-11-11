@@ -21,6 +21,15 @@ export function PageHero({ kicker, title, lead, children, className }: PageHeroP
         className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent"
         aria-hidden
       />
+      <div className="pointer-events-none absolute end-7 top-1/2 hidden -translate-y-1/2 items-center gap-3 [writing-mode:vertical-rl] lg:flex">
+        <span className="font-latin text-[9px] uppercase tracking-[0.32em] text-cream/20">Est. 2018</span>
+        <span className="h-16 w-px bg-white/12" aria-hidden />
+        <span className="font-latin text-[9px] uppercase tracking-[0.32em] text-lemon/35">Zagazig · EG</span>
+      </div>
+      <div
+        className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-lemon/25 to-transparent"
+        aria-hidden
+      />
       <div className="container-x relative">
         <div className="eyebrow">
           <span className="h-px w-8 bg-lemon/70" aria-hidden />

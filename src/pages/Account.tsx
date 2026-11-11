@@ -20,6 +20,8 @@ import {
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import type { PaymentDTO, PublicUser, SubscriptionDTO } from "../../shared/types";
+import { SessionsCard } from "../components/account/SessionsCard";
+import { MyProgram } from "../components/account/MyProgram";
 import { PaymentBadges } from "../components/ui/PaymentBadges";
 import { Photo } from "../components/ui/Photo";
 import { Spinner } from "../components/ui/Spinner";
@@ -37,7 +39,7 @@ interface AccountPayload {
   payments: PaymentDTO[];
 }
 
-type Tab = "overview" | "payments" | "profile";
+type Tab = "overview" | "program" | "payments" | "profile";
 
 const STATUS: Record<
   PaymentDTO["status"],
@@ -157,7 +159,8 @@ export default function Account() {
   const current = active[0];
   const daysLeft = current ? daysBetween(new Date(), current.endsAt) : 0;
   const totalDays = current ? Math.max(1, daysBetween(current.startsAt, current.endsAt)) : 1;
-  const progress = current ? Math.min(100, Math.max(3, Math.round((daysLeft / totalDays) * 100))) : 0;
+  const usedDays = current ? Math.max(0, totalDays - daysLeft) : 0;
+  const progress = current ? Math.min(100, Math.max(2, Math.round((usedDays / totalDays) * 100))) : 0;
   const spent = payments
     .filter((item) => item.status === "approved" || item.status === "auto_approved")
     .reduce((sum, item) => sum + item.amount, 0);
@@ -222,6 +225,7 @@ export default function Account() {
 
   const tabs: { key: Tab; label: string; count?: number }[] = [
     { key: "overview", label: ar ? "نظرة عامة" : "Overview" },
+    ...(current ? [{ key: "program" as Tab, label: ar ? "برنامجي" : "My program" }] : []),
     { key: "payments", label: ar ? "المدفوعات" : "Payments", count: payments.length },
     { key: "profile", label: ar ? "بياناتي" : "Profile" },
   ];
@@ -337,15 +341,7 @@ export default function Account() {
           ))}
         </div>
 
-        <AnimatePresence mode="wait" initial={false}>
-          <motion.div
-            key={tab}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -6 }}
-            transition={{ duration: 0.25 }}
-            className="mt-5"
-          >
+        <div key={tab} className="mt-5">
             {tab === "overview" && (
               <div className="grid gap-5 lg:grid-cols-[1.25fr_0.75fr]">
                 <div className="space-y-5">
@@ -390,9 +386,17 @@ export default function Account() {
                             </div>
                           </div>
                           <div className="mt-6 flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setTab("program")}
+                              className="inline-flex items-center gap-2 rounded-full bg-lemon px-4 py-2.5 text-xs font-bold text-ink transition-transform hover:-translate-y-0.5"
+                            >
+                              <Sparkles className="size-4" aria-hidden />
+                              {ar ? "افتح برنامجك" : "Open your program"}
+                            </button>
                             <Link
                               to={`/subscribe/${current.programId}`}
-                              className="inline-flex items-center gap-2 rounded-full bg-lemon px-4 py-2.5 text-xs font-bold text-ink transition-transform hover:-translate-y-0.5"
+                              className="inline-flex items-center gap-2 rounded-full border border-white/20 px-4 py-2.5 text-xs font-bold text-cream/75 transition-colors hover:border-lemon/50 hover:text-lemon"
                             >
                               <Sparkles className="size-4" aria-hidden />
                               {ar ? "جدّد الباقة" : "Renew plan"}
@@ -513,6 +517,10 @@ export default function Account() {
                   </div>
                 </div>
               </div>
+            )}
+
+            {tab === "program" && current && (
+              <MyProgram subscription={current} daysLeft={daysLeft} totalDays={totalDays} />
             )}
 
             {tab === "payments" && (
@@ -732,6 +740,8 @@ export default function Account() {
                     )}
                   </div>
 
+                  <SessionsCard />
+
                   <div className="panel-soft p-5">
                     <p className="flex items-center gap-2 text-xs font-bold text-cream/70">
                       <Clock3 className="size-4 text-lemon" aria-hidden />
@@ -748,8 +758,7 @@ export default function Account() {
                 </div>
               </div>
             )}
-          </motion.div>
-        </AnimatePresence>
+        </div>
       </div>
 
       {/* Screenshot modal */}

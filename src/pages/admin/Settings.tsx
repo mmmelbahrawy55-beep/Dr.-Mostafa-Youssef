@@ -141,6 +141,9 @@ export default function AdminSettings() {
                 </AdminField>
               ))}
             </div>
+            <p className="mt-2.5 text-[10px] leading-relaxed text-cream/30">
+              الروابط بتظهر في الموقع لما تكون لصفحة الحساب الفعلية (مثل ‎instagram.com/drmostafa‎). الروابط العامة اللي بتفتح على الصفحة الرئيسية بتفضل مخفية لحد ما تكتب رابط حسابك.
+            </p>
           </div>
         </section>
 

@@ -25,6 +25,7 @@ export function Footer() {
     { to: navPaths.contact, label: t.nav.contact },
   ];
 
+  // Placeholder links (the network's homepage, no account yet) stay hidden.
   const socials = [
     {
       href: info.socials.instagram,
@@ -42,7 +43,7 @@ export function Footer() {
       label: "TikTok",
       d: "M16.5 3c.3 2 1.5 3.3 3.5 3.6v2.6c-1.3.1-2.5-.3-3.6-1v6.3c0 3.2-2.3 5.5-5.3 5.5A5.2 5.2 0 0 1 6 14.8c0-3 2.4-5.3 5.6-5.1v2.8c-.4-.1-.8-.2-1.2-.2-1.4 0-2.5 1.1-2.5 2.5s1.1 2.5 2.5 2.5 2.6-1.1 2.6-2.7V3h3.5Z",
     },
-  ];
+  ].filter((social) => Boolean(social.href));
 
   return (
     <footer className="relative overflow-hidden border-t border-white/10 bg-ink-2">
@@ -57,22 +58,24 @@ export function Footer() {
               <Logo markClassName="size-11" />
             </Link>
             <p className="mt-6 max-w-xs text-sm leading-relaxed text-cream/55">{t.footer.tagline}</p>
-            <div className="mt-6 flex items-center gap-2">
-              {socials.map((social) => (
-                <a
-                  key={social.label}
-                  href={social.href}
-                  target="_blank"
-                  rel="noreferrer"
-                  aria-label={social.label}
-                  className="flex size-9 items-center justify-center rounded-full border border-white/10 text-cream/60 transition-colors hover:border-lemon/60 hover:text-lemon"
-                >
-                  <svg viewBox="0 0 24 24" className="size-4" fill="currentColor" aria-hidden>
-                    <path d={social.d} />
-                  </svg>
-                </a>
-              ))}
-            </div>
+            {socials.length > 0 && (
+              <div className="mt-6 flex items-center gap-2">
+                {socials.map((social) => (
+                  <a
+                    key={social.label}
+                    href={social.href}
+                    target="_blank"
+                    rel="noreferrer"
+                    aria-label={social.label}
+                    className="flex size-9 items-center justify-center rounded-full border border-white/10 text-cream/60 transition-colors hover:border-lemon/60 hover:text-lemon"
+                  >
+                    <svg viewBox="0 0 24 24" className="size-4" fill="currentColor" aria-hidden>
+                      <path d={social.d} />
+                    </svg>
+                  </a>
+                ))}
+              </div>
+            )}
             <PaymentBadges className="mt-6" />
           </div>
 

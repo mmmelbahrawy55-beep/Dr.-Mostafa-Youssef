@@ -9,6 +9,22 @@ const phoneDisplay = (raw: string) => {
   return raw.replace(/^\+/, "");
 };
 
+/**
+ * A social link only counts as configured when it points at a profile page
+ * (instagram.com/drmostafa) rather than the network's own homepage. Until the
+ * real accounts arrive, the footer shows nothing instead of dead links.
+ */
+const realSocial = (raw?: string) => {
+  const value = (raw ?? "").trim();
+  if (!value) return "";
+  try {
+    const url = new URL(value);
+    return url.pathname.replace(/\/+$/, "") ? value : "";
+  } catch {
+    return "";
+  };
+};
+
 /** Contact + payment settings merged over the built-in defaults. */
 export function useSiteInfo() {
   const { settings, lang } = useLang();
@@ -30,10 +46,10 @@ export function useSiteInfo() {
     },
     mapEmbed: contact?.mapEmbed || site.mapEmbed,
     socials: {
-      instagram: contact?.instagram || site.instagram,
-      facebook: contact?.facebook || site.facebook,
-      youtube: contact?.youtube || site.youtube,
-      tiktok: contact?.tiktok || site.tiktok,
+      instagram: realSocial(contact?.instagram || site.instagram),
+      facebook: realSocial(contact?.facebook || site.facebook),
+      youtube: realSocial(contact?.youtube || site.youtube),
+      tiktok: realSocial(contact?.tiktok || site.tiktok),
     },
     payments: {
       vodafone: payments?.vodafone || "01004334487",

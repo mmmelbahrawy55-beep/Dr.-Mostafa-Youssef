@@ -170,6 +170,10 @@ export function Footer() {
             </span>
           </div>
         </div>
+
+        <p className="mt-6 text-center text-[11px] tracking-wide text-cream/30" dir="ltr">
+          Programmed by Eng. Marwan El Bahrawy
+        </p>
       </div>
     </footer>
   );

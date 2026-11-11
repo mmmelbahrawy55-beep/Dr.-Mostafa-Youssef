@@ -353,10 +353,11 @@ const defaultSettings: SiteSettings = {
       "حوّل قيمة الباقة على الرقم/العنوان الموضح، واحتفظ بصورة التحويل. ارفع الصورة هنا مع رقم العملية، وسيتم تفعيل اشتراكك تلقائيًا عند التحقق.",
     instructionsEn:
       "Transfer the plan amount to the number/address shown and keep the receipt. Upload the screenshot with the transaction reference and your subscription activates automatically once verified.",
-    // Receipt screenshots are not machine-verifiable yet, so activation starts
-    // in manual review. The doctor can enable automatic activation from
-    // settings once he accepts that risk.
-    autoApprove: false,
+    // Receipt screenshots are verified by the rule-based checks in
+    // POST /api/payments (wallet number, exact amount, reference sanity,
+    // image shape, no duplicates). A clean receipt activates instantly;
+    // anything else still drops into manual review.
+    autoApprove: true,
   },
   hero: { image: images.hero },
   announcement: { ar: "", en: "", enabled: false },

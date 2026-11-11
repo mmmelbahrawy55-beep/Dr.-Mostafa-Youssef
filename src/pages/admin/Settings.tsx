@@ -209,7 +209,7 @@ export default function AdminSettings() {
           </div>
           <p className="mt-3 flex items-start gap-1.5 text-[10px] leading-relaxed text-cream/30">
             <CreditCard className="mt-0.5 size-3 shrink-0" aria-hidden />
-            النظام بيتحقق من: المبلغ، رقم المحفظة، رقم العملية، سلامة الصورة وأبعادها، وتكرار الإيصال أو رقم العملية.
+            النظام بيتحقق من: رقم المستلم مقابل رقم المحافظة المعتمدة، المبلغ بالظبط مع سعر الباقة، رقم عملية التحويل، سلامة الصورة وأبعادها، ومنع تكرار الإيصال أو رقم العملية. أي ملاحظة = مراجعة يدوية.
           </p>
         </section>
 

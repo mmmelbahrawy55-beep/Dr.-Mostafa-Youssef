@@ -159,8 +159,8 @@ try {
 }
 
 // --- public site ---
-// Receipt auto-approval is off by default (manual review); enable it for this
-// dedicated test database so both the automatic and manual paths stay covered.
+// Automatic activation is on by default; the settings write below guarantees
+// this dedicated test database covers both the automatic and manual paths.
 if (adminPassword) {
   const early = await admin.post("/api/auth/login", { email: adminEmail, password: adminPassword });
   if (early.status === 200) {
@@ -185,6 +185,7 @@ assert(
 );
 programId = site.data?.programs?.[0]?.id;
 amount = Number(site.data?.programs?.[0]?.common?.amount ?? 0);
+const wallet = site.data?.settings?.payments?.vodafone || "01004334487";
 assert("site has settings contact phone", Boolean(site.data?.settings?.contact?.phone), site.data?.settings?.contact?.phone);
 assert("site copy overrides object", Boolean(site.data?.copy?.ar && site.data?.copy?.en));
 
@@ -213,6 +214,7 @@ const badForm = new FormData();
 badForm.append("programId", programId);
 badForm.append("method", "vodafone");
 badForm.append("sender", "01012345678");
+badForm.append("recipient", wallet);
 badForm.append("reference", `REF-BAD-${stamp}`);
 badForm.append("amount", String(amount));
 badForm.append("screenshot", new Blob([Buffer.from("not an image")], { type: "image/png" }), "bad.png");
@@ -226,6 +228,7 @@ const form1 = new FormData();
 form1.append("programId", programId);
 form1.append("method", "vodafone");
 form1.append("sender", "01098765432");
+form1.append("recipient", wallet);
 form1.append("reference", ref1);
 form1.append("amount", String(amount));
 form1.append("screenshot", new Blob([png1], { type: "image/png" }), "receipt.png");
@@ -257,6 +260,7 @@ const dupForm = new FormData();
 dupForm.append("programId", programId);
 dupForm.append("method", "vodafone");
 dupForm.append("sender", "01098765432");
+dupForm.append("recipient", wallet);
 dupForm.append("reference", `VFC-${stamp}-DUP`);
 dupForm.append("amount", String(amount));
 dupForm.append("screenshot", new Blob([png1], { type: "image/png" }), "receipt.png");
@@ -270,6 +274,7 @@ const form2 = new FormData();
 form2.append("programId", programId);
 form2.append("method", "vodafone");
 form2.append("sender", "01098765432");
+form2.append("recipient", wallet);
 form2.append("reference", ref2);
 form2.append("amount", String(amount - 50));
 form2.append("screenshot", new Blob([png2], { type: "image/png" }), "receipt2.png");
@@ -347,6 +352,27 @@ assert(
     acctAfter.data?.subscriptions?.length >= 1 &&
     maxEnd > Date.now(),
   `subs ${acctAfter.data?.subscriptions?.length}, payments ${acctAfter.data?.payments?.length}, maxEnd ok ${maxEnd > Date.now()}`
+);
+
+// --- smart review: a receipt addressed to the wrong wallet never auto-activates ---
+const png3 = makePng(440, 340, (stamp % 1000000007) + 7);
+const form3 = new FormData();
+form3.append("programId", programId);
+form3.append("method", "vodafone");
+form3.append("sender", "01098765432");
+form3.append("recipient", wallet === "01111111111" ? "01111111112" : "01111111111");
+form3.append("reference", `VFC-${stamp}-W`);
+form3.append("amount", String(amount));
+form3.append("screenshot", new Blob([png3], { type: "image/png" }), "receipt3.png");
+const upload3 = await customer.req("/api/payments", { method: "POST", body: form3 });
+assert(
+  "foreign recipient stays in manual review",
+  upload3.status === 201 &&
+    upload3.data?.payment?.status === "pending" &&
+    upload3.data?.subscriptionId === null &&
+    Array.isArray(upload3.data?.payment?.risk) &&
+    upload3.data.payment.risk.some((reason) => String(reason).includes("المستلم")),
+  JSON.stringify(upload3.data)
 );
 
 // --- admin manual grant ---

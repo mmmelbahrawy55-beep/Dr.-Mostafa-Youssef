@@ -45,6 +45,22 @@ const EN: Record<string, string> = {
   "بيانات حساب إنستاباي المُحوّل منه غير مكتملة.": "The InstaPay account details you sent from are incomplete.",
   "أبعاد صورة التحويل صغيرة جدًا — ارفع سكرين شوت أوضح.":
     "The screenshot resolution is too low — upload a clearer one.",
+  "الصورة أطول من اللازم — ارفع سكرين شوت كامل للإيصال.":
+    "The image is unusually tall — upload a full screenshot of the receipt.",
+  "لم تُكتب بيانات المستلم كما هي في الإيصال — التفعيل التلقائي متوقف للمراجعة.":
+    "The recipient details weren't entered exactly as on the receipt — automatic activation is paused for review.",
+  "رقم المرسل مطابق لرقم المستلم — التحويل يبدو داخليًا.":
+    "The sender matches the recipient — the transfer looks internal.",
+  "التحويل مسجَّل من رقم العيادة نفسه.": "The transfer was made from the clinic's own number.",
+  "رقم عملية التحويل لازم يحتوي على أحرف أو أرقام.":
+    "The transaction reference must contain letters or numbers.",
+  "رقم عملية التحويل بدون أي أرقام — انسخه كما هو في الإيصال.":
+    "The transaction reference has no digits — copy it exactly as on the receipt.",
+  "رقم عملية التحويل متكرر بالكامل وغير حقيقي.":
+    "The transaction reference is repeated characters and can't be real.",
+  "رقم عملية التحويل مطابق لرقم المحفظة.": "The transaction reference matches the wallet number.",
+  "عدد محاولات رفع الإيصالات كتير دلوقتي. استنى ساعة وجرّب تاني.":
+    "Too many receipt uploads for now. Wait an hour and try again.",
 
   /* contact */
   "بعتنالنا رسايل كتير. استنى شوية.": "You've sent a lot of messages. Please wait a bit.",
@@ -57,11 +73,21 @@ const EN: Record<string, string> = {
 };
 
 const AMOUNT_MISMATCH = /^المبلغ المكتوب \((\d+)\) لا يطابق سعر الباقة \((\d+) ج\.م\)\.$/;
+const RECIPIENT_MISMATCH = /^بيانات المستلم المكتوبة \((.+?)\) لا تطابق (.+?) \((.+?)\)\.$/;
+const RECIPIENT_LABEL: Record<string, string> = {
+  "رقم محفظة العيادة": "the clinic wallet number",
+  "عنوان إنستاباي المعتمد": "the approved InstaPay address",
+};
 
 /** Maps a known Arabic API message to its English wording for English mode. */
 export function localize(message: string, lang: "ar" | "en"): string {
   if (lang === "ar") return message;
   const amount = AMOUNT_MISMATCH.exec(message);
   if (amount) return `The amount entered (${amount[1]}) doesn't match the plan price (${amount[2]} EGP).`;
+  const recipient = RECIPIENT_MISMATCH.exec(message);
+  if (recipient) {
+    const label = RECIPIENT_LABEL[recipient[2]] ?? recipient[2];
+    return `Recipient entered (${recipient[1]}) doesn't match ${label} (${recipient[3]}).`;
+  }
   return EN[message] ?? message;
 }

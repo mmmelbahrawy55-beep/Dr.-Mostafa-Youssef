@@ -184,6 +184,7 @@ export default function AdminAudit() {
         if (meta.amount) parts.push(formatEgp(Number(meta.amount)));
         if (meta.method) parts.push(METHODS[String(meta.method)] ?? String(meta.method));
         if (meta.program) parts.push(`الباقة: ${programName(meta.program)}`);
+        if (meta.recipient) parts.push(`المستلم: ${String(meta.recipient)}`);
         if (Array.isArray(meta.risk) && meta.risk.length) parts.push(`فحص تلقائي: ${meta.risk.join("، ")}`);
         return parts.join(" · ") || "—";
       }
@@ -233,6 +234,7 @@ export default function AdminAudit() {
     const amount = meta.amount ? formatEgp(Number(meta.amount)) : "";
     const method = meta.method ? (METHODS[String(meta.method)] ?? String(meta.method)) : "";
     const plan = meta.program ? programName(meta.program) : "";
+    const recipient = meta.recipient ? String(meta.recipient) : "";
     const risk = Array.isArray(meta.risk) && meta.risk.length ? meta.risk.join("، ") : "";
     const entityLabel = ENTITIES[entry.entity] ?? entry.entity;
 
@@ -240,11 +242,15 @@ export default function AdminAudit() {
       case "payment.submitted":
         return `${who} رفع إيصال دفع${amount ? ` بمبلغ ${amount}` : ""}${method ? ` عبر ${method}` : ""}${
           plan ? ` للباقة «${plan}»` : ""
-        }، والصورة دخلت النظام ومستنية مراجعة${risk ? ` — الفحص التلقائي قال: ${risk}` : "."}`;
+        }${recipient ? ` للمستلم ${recipient}` : ""}، والصورة دخلت النظام ومستنية مراجعة${
+          risk ? ` — الفحص التلقائي قال: ${risk}` : "."
+        }`;
       case "payment.auto_approved":
         return `${who} رفع إيصال دفع${amount ? ` بمبلغ ${amount}` : ""}${method ? ` عبر ${method}` : ""}${
           plan ? ` للباقة «${plan}»` : ""
-        }، والفحص التلقائي مطابق${risk ? ` (${risk})` : ""} فاتفعّل الاشتراك فورًا بدون مراجعة.`;
+        }${recipient ? ` للمستلم ${recipient}` : ""}، والفحص التلقائي مطابق${
+          risk ? ` (${risk})` : ""
+        } فاتفعّل الاشتراك فورًا بدون مراجعة.`;
       case "payment.approve":
         return `${who} راجع الإيصال ووافق يدويًا${amount ? ` على مبلغ ${amount}` : ""}، فاتفعّل الاشتراك.${
           meta.note ? ` الملاحظة: ${meta.note}` : ""

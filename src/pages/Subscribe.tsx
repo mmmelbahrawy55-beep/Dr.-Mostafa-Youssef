@@ -37,6 +37,9 @@ import { cn } from "../lib/utils";
 
 type Method = "vodafone" | "instapay";
 
+/** Loose match so "010 043 344 87" and "01004334487" compare as one number. */
+const normAccount = (value: string) => value.toLowerCase().replace(/[\s()+\-_.]/g, "");
+
 interface SubmitResult {
   payment: { id: number; status: PaymentDTO["status"]; risk: string[]; amount: number };
   subscriptionId: number | null;
@@ -62,6 +65,7 @@ export default function Subscribe() {
   const [method, setMethod] = useState<Method>("vodafone");
   const [sender, setSender] = useState(user?.phone ?? "");
   const [reference, setReference] = useState("");
+  const [recipient, setRecipient] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -81,6 +85,7 @@ export default function Subscribe() {
   }, [preview]);
 
   const target = method === "vodafone" ? info.payments.vodafone : info.payments.instapay;
+  const recipientMismatch = recipient.trim().length > 0 && normAccount(recipient) !== normAccount(target);
   const methodLabel =
     method === "vodafone" ? (ar ? "فودافون كاش" : "Vodafone Cash") : ar ? "إنستاباي" : "InstaPay";
 
@@ -130,6 +135,12 @@ export default function Subscribe() {
       return setError(
         ar ? "اكتب رقم عملية التحويل كما يظهر في الإيصال." : "Enter the transaction reference exactly as shown on the receipt."
       );
+    if (!recipient.trim())
+      return setError(
+        ar
+          ? "اكتب رقم المستلم كما هو في الإيصال — بدونه الاشتراك مش بيتفعّل تلقائيًا."
+          : "Enter the recipient exactly as on the receipt — without it the plan can't activate automatically."
+      );
     if (!file) return setError(ar ? "ارفع صورة إيصال التحويل." : "Upload the transfer receipt screenshot.");
 
     setBusy(true);
@@ -150,6 +161,7 @@ export default function Subscribe() {
       form.append("programId", program.contentId ?? program.id);
       form.append("method", method);
       form.append("sender", sender.trim());
+      form.append("recipient", recipient.trim());
       form.append("reference", reference.trim());
       form.append("amount", String(amount));
       form.append("screenshot", upload);
@@ -236,8 +248,8 @@ export default function Subscribe() {
                     ? `باقة «${program.name}» شغالة دلوقتي لمدة ${days} يوم. تقدر تبدأ من حسابك فورًا.`
                     : `“${program.name}” is active for ${days} days. You can start from your account now.`
                   : ar
-                    ? "التحقق التلقائي محتاج مراجعة بسيطة من فريق الدكتور. عادةً بنراجع الإيصالات خلال ساعات العمل، وهتلاقي التحديث في حسابك."
-                    : "Automatic verification needs a quick review from the team. Receipts are usually checked within working hours, and the update will appear in your account."}
+                    ? "النظام لقى ملاحظات في الإيصال فحوّله للمراجعة اليدوية. الإدارة بتشوف الصورة وسبب الملاحظة وتوافق عادةً في نفس يوم العمل — وهتلاقي التحديث في حسابك."
+                    : "The system found notes on the receipt, so it went to manual review. The team sees the image and the reason and usually decides the same working day — the update appears in your account."}
               </p>
               <div className="mx-auto mt-5 inline-flex items-center gap-2 rounded-full border border-white/12 bg-white/[0.03] px-4 py-2 text-[11px] text-cream/60">
                 <span>{ar ? "رقم الدفعة" : "Payment"} #{result.payment.id}</span>
@@ -253,7 +265,7 @@ export default function Subscribe() {
                 <div className="mb-5 rounded-xl border border-amber-400/25 bg-amber-400/[0.06] p-4">
                   <p className="flex items-center gap-1.5 text-[11px] font-bold text-amber-200">
                     <Info className="size-3.5" aria-hidden />
-                    {ar ? "ملاحظات على الإيصال (مش بالضرورة مشكلة):" : "Notes on the receipt (not necessarily problems):"}
+                    {ar ? "اللي خلّى الدفعة للمراجعة اليدوية:" : "Why this payment is under manual review:"}
                   </p>
                   <ul className="mt-2 space-y-1">
                     {result.payment.risk.map((reason) => (
@@ -562,8 +574,8 @@ export default function Subscribe() {
                 <p className="mt-2 flex items-start gap-1.5 text-[10px] leading-relaxed text-cream/30">
                   <Info className="mt-0.5 size-3 shrink-0" aria-hidden />
                   {ar
-                    ? "حوّل نفس المبلغ بالظبط — أي فرق في المبلغ بيحوّل الدفعة للمراجعة اليدوية."
-                    : "Transfer the exact amount — any difference sends the payment to manual review."}
+                    ? "النظام بيراجع الإيصال لوحده: المبلغ بالظبط، رقم المستلم مقابل رقم العيادة، ورقم العملية — لو كل حاجة مظبوطة الاشتراك بيفعّل في نفس اللحظة، وأي فرق بيحوّل الدفعة للمراجعة اليدوية."
+                    : "The system reviews the receipt itself: the exact amount, the recipient against the clinic number, and the transaction reference. If everything matches the plan activates immediately; any mismatch sends it to manual review."}
                 </p>
 
                 {/* Details */}
@@ -601,6 +613,46 @@ export default function Subscribe() {
                       placeholder={ar ? "زي ما هو في الإيصال" : "As shown on the receipt"}
                     />
                   </div>
+                </div>
+
+                {/* Recipient read back from the receipt — the server matches it
+                    against the clinic wallet, so a transfer to an old or wrong
+                    number never activates on its own. */}
+                <div className="mt-4">
+                  <label htmlFor="pay-recipient" className="mb-1.5 block text-[11px] font-semibold text-cream/55">
+                    {method === "vodafone"
+                      ? ar
+                        ? "رقم المحفظة المستلم كما هو في الإيصال"
+                        : "Recipient wallet number as on the receipt"
+                      : ar
+                        ? "عنوان إنستاباي المستلم كما هو في الإيصال"
+                        : "Recipient InstaPay account as on the receipt"}
+                  </label>
+                  <input
+                    id="pay-recipient"
+                    className="field"
+                    value={recipient}
+                    onChange={(event) => setRecipient(event.target.value)}
+                    dir="ltr"
+                    inputMode={method === "vodafone" ? "tel" : "text"}
+                    placeholder={ar ? "زي ما هو مكتوب في الإيصال" : "As written on the receipt"}
+                    aria-describedby="pay-recipient-hint"
+                  />
+                  <p
+                    id="pay-recipient-hint"
+                    className={cn(
+                      "mt-1.5 text-[10px] leading-relaxed",
+                      recipientMismatch ? "text-amber-300" : "text-cream/35"
+                    )}
+                  >
+                    {recipientMismatch
+                      ? ar
+                        ? `مختلف عن رقم العيادة (${target}) — لو سلّمت كده الدفعة هتروح للمراجعة اليدوية.`
+                        : `Different from the clinic number (${target}) — submitting this sends the payment to manual review.`
+                      : ar
+                        ? "اكتب الرقم زي ما هو في الإيصال — النظام بيطابقه مع رقم العيادة قبل التفعيل التلقائي."
+                        : "Type it exactly as on the receipt — the system matches it against the clinic number before auto-activating."}
+                  </p>
                 </div>
 
                 {/* Upload */}
@@ -702,7 +754,7 @@ export default function Subscribe() {
                   </span>
                   <span className="flex items-center gap-1.5">
                     <BadgeCheck className="size-3 text-lemon/60" aria-hidden />
-                    {ar ? "تحقق تلقائي من الإيصال" : "Automatic receipt verification"}
+                    {ar ? "تحقق ذكي تلقائي من الإيصال" : "Smart automatic receipt check"}
                   </span>
                 </div>
               </form>

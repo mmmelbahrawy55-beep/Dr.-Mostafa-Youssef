@@ -808,6 +808,14 @@ app.post(
         return;
       }
 
+      // Receipts are capped per account so a scripted client cannot flood the
+      // store (and the admin queue) with junk uploads.
+      if (await limited(`pay:${user.id}`, 8, 60 * 60 * 1000)) {
+        cleanup();
+        res.status(429).json({ error: "عدد محاولات رفع الإيصالات كتير دلوقتي. استنى ساعة وجرّب تاني." });
+        return;
+      }
+
       const program = await getContent(str(req.body.programId, 80));
       if (!program || program.collection !== "programs" || !program.active) {
         cleanup();
@@ -839,15 +847,60 @@ app.post(
 
       const reasons: string[] = [];
       const settings = await getSettings();
+
+      /*
+       * Smart receipt review, done with rules instead of an external model:
+       * every number the customer typed is checked against the wallet we
+       * actually collect on, the exact plan price and the image itself. A
+       * receipt that passes every rule activates the subscription on the spot;
+       * anything questionable is parked as `pending` with Arabic reasons the
+       * admin can read — it is never silently rejected.
+       */
+      const expectedTarget = method === "vodafone" ? settings.payments.vodafone : settings.payments.instapay;
+      const normalizeAccount = (value: string) => value.toLowerCase().replace(/[\s()+\-_.]/g, "");
+      const recipient = str(req.body.recipient, 80).trim();
+      const senderKey = normalizeAccount(sender);
+      const recipientKey = normalizeAccount(recipient);
+      const targetKey = normalizeAccount(expectedTarget);
+      const refText = reference.toLowerCase().replace(/[\s\-_]/g, "");
+
       if (size < 8 * 1024) reasons.push("حجم الصورة صغير جدًا — تأكد إنها سكرين شوت واضح للتحويل.");
-      if (claimed !== amount) reasons.push(`المبلغ المكتوب (${claimed}) لا يطابق سعر الباقة (${amount} ج.م).`);
-      if (reference.length < 4) reasons.push("رقم عملية التحويل قصير أو غير مكتمل.");
+      if (claimed !== amount || claimed <= 0) {
+        reasons.push(`المبلغ المكتوب (${claimed}) لا يطابق سعر الباقة (${amount} ج.م).`);
+      }
+
+      // Did the money actually reach the clinic's wallet? Only a number read
+      // off the receipt proves it, so an empty or foreign recipient never
+      // auto-activates — it goes straight to manual review.
+      if (!recipient) {
+        reasons.push("لم تُكتب بيانات المستلم كما هي في الإيصال — التفعيل التلقائي متوقف للمراجعة.");
+      } else if (recipientKey !== targetKey) {
+        reasons.push(
+          `بيانات المستلم المكتوبة (${recipient}) لا تطابق ${
+            method === "vodafone" ? "رقم محفظة العيادة" : "عنوان إنستاباي المعتمد"
+          } (${expectedTarget}).`
+        );
+      }
+      if (recipient && senderKey === recipientKey) reasons.push("رقم المرسل مطابق لرقم المستلم — التحويل يبدو داخليًا.");
+      if (senderKey === targetKey) reasons.push("التحويل مسجَّل من رقم العيادة نفسه.");
+
+      if (reference.length < 6) reasons.push("رقم عملية التحويل قصير أو غير مكتمل.");
+      if (!/[a-z0-9]/i.test(reference)) reasons.push("رقم عملية التحويل لازم يحتوي على أحرف أو أرقام.");
+      else if (!/\d/.test(reference)) reasons.push("رقم عملية التحويل بدون أي أرقام — انسخه كما هو في الإيصال.");
+      if (/^(.)\1+$/i.test(refText)) reasons.push("رقم عملية التحويل متكرر بالكامل وغير حقيقي.");
+      if (refText === senderKey || (recipientKey && refText === recipientKey)) {
+        reasons.push("رقم عملية التحويل مطابق لرقم المحفظة.");
+      }
       if (method === "vodafone" && !/^01[0125]\d{8}$/.test(sender)) {
         reasons.push("رقم المحفظة المُحوّل منها غير مطابق لأرقام فودافون كاش.");
       }
       if (method === "instapay" && sender.length < 5) reasons.push("بيانات حساب إنستاباي المُحوّل منه غير مكتملة.");
-      if (dims.width && dims.height && (dims.width < 280 || dims.height < 280)) {
-        reasons.push("أبعاد صورة التحويل صغيرة جدًا — ارفع سكرين شوت أوضح.");
+      if (dims.width && dims.height) {
+        if (dims.width < 280 || dims.height < 280) {
+          reasons.push("أبعاد صورة التحويل صغيرة جدًا — ارفع سكرين شوت أوضح.");
+        }
+        const ratio = Math.max(dims.width, dims.height) / Math.min(dims.width, dims.height);
+        if (ratio > 3.2) reasons.push("الصورة أطول من اللازم — ارفع سكرين شوت كامل للإيصال.");
       }
 
       const referenceKey = sha256(`${method}:${reference.toLowerCase().replace(/\s+/g, "")}`);
@@ -882,6 +935,7 @@ app.post(
         return;
       }
 
+      // Every rule passed → activate on the spot. One doubt → manual review.
       const status = reasons.length === 0 && settings.payments.autoApprove !== false ? "auto_approved" : "pending";
       const filename = path.basename(file.path);
 
@@ -927,7 +981,7 @@ app.post(
         status === "auto_approved" ? "payment.auto_approved" : "payment.submitted",
         "payment",
         paymentId,
-        { amount, method, program: program.id, risk: reasons }
+        { amount, method, program: program.id, recipient, risk: reasons }
       );
 
       res.status(201).json({

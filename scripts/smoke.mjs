@@ -178,13 +178,18 @@ if (adminPassword) {
 
 const site = await customer.get("/api/site");
 assert("GET /api/site", site.status === 200, `status ${site.status}`);
+// The free trial program sorts first (amount 0, no payment), so payment checks
+// must target the first program that actually costs money.
+const paidPrograms = (Array.isArray(site.data?.programs) ? site.data.programs : []).filter(
+  (program) => Number(program.common?.amount) > 0
+);
 assert(
   "site has programs with prices",
-  Array.isArray(site.data?.programs) && site.data.programs.length > 0 && Number(site.data.programs[0].common?.amount) > 0,
-  `${site.data?.programs?.length ?? 0} programs`
+  paidPrograms.length > 0,
+  `${site.data?.programs?.length ?? 0} programs (${paidPrograms.length} paid)`
 );
-programId = site.data?.programs?.[0]?.id;
-amount = Number(site.data?.programs?.[0]?.common?.amount ?? 0);
+programId = paidPrograms[0]?.id;
+amount = Number(paidPrograms[0]?.common?.amount ?? 0);
 const wallet = site.data?.settings?.payments?.vodafone || "01004334487";
 assert("site has settings contact phone", Boolean(site.data?.settings?.contact?.phone), site.data?.settings?.contact?.phone);
 assert("site copy overrides object", Boolean(site.data?.copy?.ar && site.data?.copy?.en));
@@ -374,6 +379,240 @@ assert(
     upload3.data.payment.risk.some((reason) => String(reason).includes("المستلم")),
   JSON.stringify(upload3.data)
 );
+
+// --- coach chat video upload: short clip accepted, oversized clip rejected ---
+// Passes the server's real-video check (MP4 "ftyp" header) while staying tiny.
+const fakeMp4 = (bytes) => Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from("ftypisom"), Buffer.alloc(bytes, 7)]);
+
+const shortForm = new FormData();
+shortForm.append("body", "اختبار رفع فيديو قصير");
+shortForm.append("file", new Blob([fakeMp4(64 * 1024)], { type: "video/mp4" }), `clip-${stamp}.mp4`);
+const shortUpload = await customer.req("/api/coach/messages", { method: "POST", body: shortForm });
+assert(
+  "coach video upload accepts a short clip",
+  shortUpload.status === 201 &&
+    shortUpload.data?.message?.mediaKind === "video" &&
+    Boolean(shortUpload.data?.message?.mediaUrl),
+  `${shortUpload.status} ${JSON.stringify(shortUpload.data).slice(0, 160)}`
+);
+
+// The stored clip is served back to its owner with the right content type.
+const clipUrl = shortUpload.data?.message?.mediaUrl ?? "";
+const clipRead = clipUrl ? await customer.get(clipUrl) : { status: 0, headers: { get: () => "" } };
+assert(
+  "coach video clip is served to its owner",
+  clipRead.status === 200 && String(clipRead.headers.get("content-type") ?? "").includes("video/mp4"),
+  `${clipRead.status} ${clipRead.headers.get("content-type") ?? ""}`
+);
+
+const bigForm = new FormData();
+bigForm.append("body", "اختبار رفع فيديو كبير");
+bigForm.append("file", new Blob([fakeMp4(Math.round(4.5 * 1024 * 1024))], { type: "video/mp4" }), `huge-${stamp}.mp4`);
+const bigUpload = await customer.req("/api/coach/messages", { method: "POST", body: bigForm });
+const afterBig = await customer.get("/api/coach/messages");
+assert(
+  "coach video upload rejects an oversized clip",
+  bigUpload.status === 413 &&
+    Array.isArray(afterBig.data?.messages) &&
+    !afterBig.data.messages.some((m) => String(m.body ?? "").includes("كبير")),
+  `${bigUpload.status} ${JSON.stringify(bigUpload.data).slice(0, 120)}`
+);
+
+// --- chunked chat uploads: any size, split into ≤ 3 MB slices ---
+// Returns the raw bytes so large-file round trips can be compared exactly.
+async function readBinary(path, session) {
+  const res = await fetch(BASE + path, { headers: session.cookie ? { cookie: session.cookie } : {} });
+  const body = Buffer.from(await res.arrayBuffer());
+  return { status: res.status, type: res.headers.get("content-type") ?? "", bytes: body.byteLength };
+}
+// Range requests power video scrubbing; the bytes must match the source file.
+async function readRange(path, session, range) {
+  const res = await fetch(BASE + path, {
+    headers: { ...(session.cookie ? { cookie: session.cookie } : {}), range },
+  });
+  return {
+    status: res.status,
+    contentRange: res.headers.get("content-range") ?? "",
+    acceptRanges: res.headers.get("accept-ranges") ?? "",
+    body: Buffer.from(await res.arrayBuffer()),
+  };
+}
+const CHUNK = 3 * 1024 * 1024;
+const fakePng = (bytes) =>
+  Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(Math.max(0, bytes - 8), 65)]);
+
+// (a) a small video alone in one chunk
+const smallBuf = fakeMp4(64 * 1024);
+const createSmall = await customer.post("/api/coach/uploads", { mime: "video/mp4", bytes: smallBuf.length });
+assert(
+  "chat upload session opens with one chunk",
+  createSmall.status === 201 && typeof createSmall.data?.uploadId === "string" && createSmall.data?.chunks === 1,
+  JSON.stringify(createSmall.data)
+);
+const smallId = createSmall.data?.uploadId ?? "";
+const smallPart = new FormData();
+smallPart.append("file", new Blob([smallBuf], { type: "video/mp4" }), "0.part");
+const smallPartRes = await customer.req(`/api/coach/uploads/${smallId}/0`, { method: "POST", body: smallPart });
+assert(
+  "chat chunk accepted",
+  smallPartRes.status === 200 && smallPartRes.data?.received === 1,
+  JSON.stringify(smallPartRes.data)
+);
+const smallMsg = await customer.post("/api/coach/messages", { body: "فحص رفع مجزأ", mediaUploadId: smallId });
+assert(
+  "chunked video message created",
+  smallMsg.status === 201 && smallMsg.data?.message?.mediaKind === "video" && Boolean(smallMsg.data?.message?.mediaUrl),
+  `${smallMsg.status} ${JSON.stringify(smallMsg.data).slice(0, 160)}`
+);
+const smallRead = smallMsg.data?.message?.mediaUrl
+  ? await readBinary(smallMsg.data.message.mediaUrl, customer)
+  : { status: 0, type: "", bytes: 0 };
+assert(
+  "chunked video served byte-exact",
+  smallRead.status === 200 && smallRead.type.includes("video/mp4") && smallRead.bytes === smallBuf.length,
+  `${smallRead.status} ${smallRead.type} ${smallRead.bytes}`
+);
+const reuse = await customer.post("/api/coach/messages", { body: "محاولة إعادة استخدام", mediaUploadId: smallId });
+assert("chat upload attaches once", reuse.status === 410, `${reuse.status} ${JSON.stringify(reuse.data).slice(0, 120)}`);
+
+// (b) a 9 MB video across several chunks, byte-exact on the way back
+const bigBuf = fakeMp4(9 * 1024 * 1024);
+const createBig = await customer.post("/api/coach/uploads", { mime: "video/mp4", bytes: bigBuf.length });
+const bigChunks = createBig.data?.chunks ?? 0;
+assert(
+  "9 MB session splits into chunks",
+  createBig.status === 201 && bigChunks === Math.ceil(bigBuf.length / CHUNK) && bigChunks >= 3,
+  JSON.stringify({ ...createBig.data, expected: Math.ceil(bigBuf.length / CHUNK) })
+);
+const bigId = createBig.data?.uploadId ?? "";
+const bigStatuses = [];
+for (let i = 0; i < bigChunks; i += 1) {
+  const slice = bigBuf.subarray(i * CHUNK, Math.min((i + 1) * CHUNK, bigBuf.length));
+  const form = new FormData();
+  form.append("file", new Blob([slice], { type: "video/mp4" }), `${i}.part`);
+  const put = await customer.req(`/api/coach/uploads/${bigId}/${i}`, { method: "POST", body: form });
+  bigStatuses.push(put.status);
+}
+assert("9 MB video uploads in chunks", bigStatuses.every((status) => status === 200), bigStatuses.join(","));
+const bigMsg = await customer.post("/api/coach/messages", { body: "فيديو 9 ميجا", mediaUploadId: bigId });
+assert(
+  "9 MB chunked message created",
+  bigMsg.status === 201 && bigMsg.data?.message?.mediaKind === "video",
+  `${bigMsg.status} ${JSON.stringify(bigMsg.data).slice(0, 160)}`
+);
+const bigRead = bigMsg.data?.message?.mediaUrl
+  ? await readBinary(bigMsg.data.message.mediaUrl, customer)
+  : { status: 0, type: "", bytes: 0 };
+assert(
+  "9 MB video served byte-exact",
+  bigRead.status === 200 && bigRead.bytes === bigBuf.length,
+  `${bigRead.status} ${bigRead.bytes}`
+);
+// A range that crosses a chunk boundary must return exactly those bytes.
+const midRange = bigMsg.data?.message?.mediaUrl
+  ? await readRange(bigMsg.data.message.mediaUrl, customer, "bytes=3100000-3300000")
+  : { status: 0, contentRange: "", acceptRanges: "", body: Buffer.alloc(0) };
+assert(
+  "9 MB video honours range requests across chunks",
+  midRange.status === 206 &&
+    midRange.acceptRanges === "bytes" &&
+    midRange.contentRange === `bytes 3100000-3300000/${bigBuf.length}` &&
+    midRange.body.length === 200001 &&
+    midRange.body.equals(bigBuf.subarray(3100000, 3300001)),
+  `${midRange.status} ${midRange.contentRange} ${midRange.body.length}`
+);
+const badRange = bigMsg.data?.message?.mediaUrl
+  ? await readRange(bigMsg.data.message.mediaUrl, customer, `bytes=${bigBuf.length + 5}-`)
+  : { status: 0, contentRange: "", acceptRanges: "", body: Buffer.alloc(0) };
+assert(
+  "range past the end answered 416",
+  badRange.status === 416 && badRange.contentRange === `bytes */${bigBuf.length}`,
+  `${badRange.status} ${badRange.contentRange}`
+);
+
+// (c) a 5 MB image across two chunks
+const pngBuf = fakePng(5 * 1024 * 1024);
+const createPng = await customer.post("/api/coach/uploads", { mime: "image/png", bytes: pngBuf.length });
+const pngChunks = createPng.data?.chunks ?? 0;
+assert(
+  "5 MB image session splits into two chunks",
+  createPng.status === 201 && pngChunks === 2,
+  JSON.stringify(createPng.data)
+);
+const pngId = createPng.data?.uploadId ?? "";
+for (let i = 0; i < pngChunks; i += 1) {
+  const slice = pngBuf.subarray(i * CHUNK, Math.min((i + 1) * CHUNK, pngBuf.length));
+  const form = new FormData();
+  form.append("file", new Blob([slice], { type: "image/png" }), `${i}.part`);
+  await customer.req(`/api/coach/uploads/${pngId}/${i}`, { method: "POST", body: form });
+}
+const pngMsg = await customer.post("/api/coach/messages", { body: "صورة 5 ميجا", mediaUploadId: pngId });
+const pngRead = pngMsg.data?.message?.mediaUrl
+  ? await readBinary(pngMsg.data.message.mediaUrl, customer)
+  : { status: 0, type: "", bytes: 0 };
+assert(
+  "5 MB chunked image served byte-exact",
+  pngMsg.status === 201 &&
+    pngMsg.data?.message?.mediaKind === "image" &&
+    pngRead.status === 200 &&
+    pngRead.type.includes("image/png") &&
+    pngRead.bytes === pngBuf.length,
+  `${pngMsg.status} ${pngRead.status} ${pngRead.bytes}`
+);
+
+// (d) doctor sends a chunked clip; the customer reads and opens it
+const docBuf = fakeMp4(80 * 1024);
+const docCreate = await admin.post("/api/coach/uploads", { mime: "video/mp4", bytes: docBuf.length });
+const docId = docCreate.data?.uploadId ?? "";
+const docPart = new FormData();
+docPart.append("file", new Blob([docBuf], { type: "video/mp4" }), "0.part");
+await admin.req(`/api/coach/uploads/${docId}/0`, { method: "POST", body: docPart });
+const docMsg = await admin.post(`/api/admin/conversations/${createdCustomerId}/messages`, {
+  body: "رد الدكتور بفيديو",
+  mediaUploadId: docId,
+});
+assert(
+  "doctor chunked reply created",
+  docMsg.status === 201 && docMsg.data?.message?.mediaKind === "video",
+  `${docMsg.status} ${JSON.stringify(docMsg.data).slice(0, 160)}`
+);
+const custList = await customer.get("/api/coach/messages");
+const docSeen = Array.isArray(custList.data?.messages)
+  ? custList.data.messages.find((item) => item.sender === "doctor" && String(item.body ?? "").includes("رد الدكتور بفيديو"))
+  : null;
+const docRead = docSeen?.mediaUrl ? await readBinary(docSeen.mediaUrl, customer) : { status: 0, type: "", bytes: 0 };
+assert(
+  "customer opens the doctor's chunked clip",
+  docRead.status === 200 && docRead.type.includes("video/mp4") && docRead.bytes === docBuf.length,
+  `${docRead.status} ${docRead.bytes}`
+);
+
+// (e) limits and ownership
+const tooBig = await customer.post("/api/coach/uploads", { mime: "video/mp4", bytes: 65 * 1024 * 1024 });
+assert(
+  "65 MB declaration refused",
+  tooBig.status === 413 && !tooBig.data?.uploadId,
+  `${tooBig.status} ${JSON.stringify(tooBig.data).slice(0, 120)}`
+);
+const adminSess = await admin.post("/api/coach/uploads", { mime: "image/png", bytes: 2048 });
+const adminUploadId = adminSess.data?.uploadId ?? "";
+const stealMsg = await customer.post("/api/coach/messages", { body: "محاولة سرقة", mediaUploadId: adminUploadId });
+assert("customer cannot attach the doctor's upload", stealMsg.status === 403, `${stealMsg.status}`);
+const stealPart = new FormData();
+stealPart.append("file", new Blob([fakePng(64)], { type: "image/png" }), "0.part");
+const stealPut = await customer.req(`/api/coach/uploads/${adminUploadId}/0`, { method: "POST", body: stealPart });
+assert("customer cannot write to the doctor's upload", stealPut.status === 403, `${stealPut.status}`);
+const mine = await customer.post("/api/coach/uploads", { mime: "image/png", bytes: 1024 });
+const mineId = mine.data?.uploadId ?? "";
+const badIndexForm = new FormData();
+badIndexForm.append("file", new Blob([fakePng(32)], { type: "image/png" }), "9.part");
+const badIndex = await customer.req(`/api/coach/uploads/${mineId}/9`, { method: "POST", body: badIndexForm });
+assert("chunk index outside the session is refused", badIndex.status === 400, `${badIndex.status}`);
+const ghost = await customer.post("/api/coach/messages", {
+  body: "جلسة مش موجودة",
+  mediaUploadId: "AAAAAAAAAAAAAAAAAAAAAAAA",
+});
+assert("unknown upload session refused", ghost.status === 410, `${ghost.status}`);
 
 // --- admin manual grant ---
 const grant = await admin.post("/api/admin/subscriptions", { userId: createdCustomerId, programId, days: 7 });

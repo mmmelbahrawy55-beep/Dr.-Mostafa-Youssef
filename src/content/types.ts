@@ -1,3 +1,5 @@
+import type { SiteAsset } from "../../shared/types";
+
 export type Lang = "ar" | "en";
 
 export type IconKey = "nutrition" | "flame" | "muscle" | "coach" | "sport" | "lab";
@@ -92,6 +94,8 @@ export interface Program {
   amount?: number;
   days?: number;
   image?: string;
+  /** Photos, videos and PDFs the doctor attached to this plan. */
+  assets?: SiteAsset[];
   name: string;
   price: string;
   tagline: string;
@@ -170,7 +174,6 @@ export interface ResultsPage extends PageIntro {
   drag: string;
   statLabel: string;
   durationLabel: string;
-  demoNote: string;
   cta: string;
 }
 

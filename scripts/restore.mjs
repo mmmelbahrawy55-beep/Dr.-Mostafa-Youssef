@@ -57,14 +57,44 @@ if (!Array.isArray(backup.keys)) {
   process.exit(1);
 }
 
+/**
+ * Retries transient Upstash failures. A restore deletes a key before writing it
+ * back, so a dropped connection must be retried instead of leaving that key
+ * empty (or aborting the rest of the file).
+ */
 async function command(...args) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify(args),
-  });
-  if (!response.ok) throw new Error(`Redis command failed (${response.status}): ${args[0]}`);
-  return (await response.json()).result;
+  const attempts = 6;
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(5_000, 300 * 2 ** attempt)));
+    let response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(args),
+        signal: AbortSignal.timeout(120_000),
+      });
+    } catch (error) {
+      lastError = error;
+      continue;
+    }
+    if (response.status === 429 || response.status >= 500) {
+      lastError = new Error(`Redis command failed (${response.status}): ${args[0]}`);
+      continue;
+    }
+    if (!response.ok) throw new Error(`Redis command failed (${response.status}): ${args[0]}`);
+    let payload;
+    try {
+      payload = await response.json();
+    } catch (error) {
+      lastError = error;
+      continue;
+    }
+    if (payload?.error) throw new Error(`Redis command failed: ${args[0]} — ${payload.error}`);
+    return payload.result;
+  }
+  throw lastError instanceof Error ? lastError : new Error(`Redis command failed: ${args[0]}`);
 }
 
 function chunks(list, size) {
@@ -74,33 +104,72 @@ function chunks(list, size) {
 }
 
 async function main() {
+  const verifyOnly = process.env.RESTORE_VERIFY_ONLY === "1";
   let restored = 0;
+  if (!verifyOnly) {
+    for (const row of backup.keys) {
+      if (!row?.key || !row.type) continue;
+      await command("DEL", row.key);
+
+      if (row.type === "string") {
+        await command("SET", row.key, row.value ?? "");
+      } else if (row.type === "hash") {
+        const flat = Array.isArray(row.value) ? row.value : [];
+        for (const part of chunks(flat, 500)) {
+          if (part.length >= 2) await command("HSET", row.key, ...part);
+        }
+      } else if (row.type === "set") {
+        const members = Array.isArray(row.value) ? row.value : [];
+        for (const part of chunks(members, 500)) {
+          if (part.length) await command("SADD", row.key, ...part);
+        }
+      } else if (row.type === "list") {
+        const items = Array.isArray(row.value) ? row.value : [];
+        for (const part of chunks(items, 500)) {
+          if (part.length) await command("RPUSH", row.key, ...part);
+        }
+      }
+      restored += 1;
+      if (restored % 50 === 0) console.log(`Restored ${restored}/${backup.keys.length}…`);
+    }
+  } else {
+    console.log(`Verify-only: checking ${backup.keys.length} keys without writing…`);
+  }
+
+  // Verify every key exists with the expected type and size. Cheap commands
+  // (TYPE/STRLEN/…) catch a key that ended up empty without re-reading 70 MB.
+  const bad = [];
   for (const row of backup.keys) {
     if (!row?.key || !row.type) continue;
-    await command("DEL", row.key);
-
-    if (row.type === "string") {
-      await command("SET", row.key, row.value ?? "");
-    } else if (row.type === "hash") {
-      const flat = Array.isArray(row.value) ? row.value : [];
-      for (const part of chunks(flat, 500)) {
-        if (part.length >= 2) await command("HSET", row.key, ...part);
-      }
-    } else if (row.type === "set") {
-      const members = Array.isArray(row.value) ? row.value : [];
-      for (const part of chunks(members, 500)) {
-        if (part.length) await command("SADD", row.key, ...part);
-      }
-    } else if (row.type === "list") {
-      const items = Array.isArray(row.value) ? row.value : [];
-      for (const part of chunks(items, 500)) {
-        if (part.length) await command("RPUSH", row.key, ...part);
-      }
+    const type = await command("TYPE", row.key);
+    let count = 0;
+    if (row.type === "string") count = Number(await command("STRLEN", row.key));
+    else if (row.type === "hash") count = Number(await command("HLEN", row.key));
+    else if (row.type === "set") count = Number(await command("SCARD", row.key));
+    else if (row.type === "list") count = Number(await command("LLEN", row.key));
+    const expected =
+      row.type === "string"
+        ? // STRLEN counts UTF-8 bytes, not JS characters (Arabic text is 2 bytes).
+          Buffer.byteLength(String(row.value ?? ""), "utf8")
+        : Array.isArray(row.value)
+          ? row.type === "hash"
+            ? row.value.length / 2
+            : row.value.length
+          : 0;
+    if (type !== row.type || (expected > 0 && count !== expected)) {
+      bad.push(`${row.key} (${type}, ${count} vs ${expected})`);
     }
-    restored += 1;
-    if (restored % 50 === 0) console.log(`Restored ${restored}/${backup.keys.length}…`);
   }
-  console.log(`Restored ${restored} keys into namespace "${prefix}".`);
+  if (bad.length) {
+    const sample = bad.slice(0, 5).join("; ");
+    throw new Error(`${bad.length} keys did not restore correctly (${sample}). Run the restore again.`);
+  }
+
+  console.log(
+    verifyOnly
+      ? `Verified ${restored || backup.keys.length} keys in namespace "${prefix}".`
+      : `Restored ${restored} keys into namespace "${prefix}" and verified every one.`
+  );
 }
 
 main().catch((error) => {

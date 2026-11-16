@@ -84,33 +84,35 @@ export default function About() {
         </div>
       </section>
 
-      <section className="container-x py-20 md:py-28">
-        <SectionHeading kicker={t.nav.about} title={t.about.credsTitle} />
-        <div className="mt-12 grid gap-10 lg:grid-cols-[1fr_1.2fr]">
-          <Reveal className="overflow-hidden rounded-[2rem] border border-white/10">
-            <img src={images.gym} alt="" className="h-full min-h-64 w-full object-cover" loading="lazy" />
-          </Reveal>
-          <div className="relative">
-            <span className="absolute inset-y-2 start-[3.1rem] w-px bg-white/10" aria-hidden />
-            <ul className="space-y-8">
-              {t.about.creds.map((cred, index) => (
-                <Reveal key={cred.title} delay={index * 0.06}>
-                  <li className="relative flex gap-6">
-                    <span className="relative z-10 flex size-8 shrink-0 items-center justify-center rounded-full border border-lemon/40 bg-ink text-[10px] font-bold text-lemon">
-                      {index + 1}
-                    </span>
-                    <div className="pb-1">
-                      <p className="font-latin text-sm text-lemon">{cred.year}</p>
-                      <p className="mt-1 font-display text-base font-semibold text-cream">{cred.title}</p>
-                      <p className="mt-0.5 text-sm text-cream/45">{cred.place}</p>
-                    </div>
-                  </li>
-                </Reveal>
-              ))}
-            </ul>
+      {t.about.creds.length > 0 && (
+        <section className="container-x py-20 md:py-28">
+          <SectionHeading kicker={t.nav.about} title={t.about.credsTitle} />
+          <div className="mt-12 grid gap-10 lg:grid-cols-[1fr_1.2fr]">
+            <Reveal className="overflow-hidden rounded-[2rem] border border-white/10">
+              <img src={images.gym} alt="" className="h-full min-h-64 w-full object-cover" loading="lazy" />
+            </Reveal>
+            <div className="relative">
+              <span className="absolute inset-y-2 start-[3.1rem] w-px bg-white/10" aria-hidden />
+              <ul className="space-y-8">
+                {t.about.creds.map((cred, index) => (
+                  <Reveal key={cred.title} delay={index * 0.06}>
+                    <li className="relative flex gap-6">
+                      <span className="relative z-10 flex size-8 shrink-0 items-center justify-center rounded-full border border-lemon/40 bg-ink text-[10px] font-bold text-lemon">
+                        {index + 1}
+                      </span>
+                      <div className="pb-1">
+                        <p className="font-latin text-sm text-lemon">{cred.year}</p>
+                        <p className="mt-1 font-display text-base font-semibold text-cream">{cred.title}</p>
+                        <p className="mt-0.5 text-sm text-cream/45">{cred.place}</p>
+                      </div>
+                    </li>
+                  </Reveal>
+                ))}
+              </ul>
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
+      )}
 
       <section className="container-x pb-20 md:pb-28">
         <Reveal>

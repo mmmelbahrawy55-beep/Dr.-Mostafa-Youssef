@@ -28,6 +28,7 @@ const AdminGate = lazy(() => import("./pages/admin/AdminGate"));
 const AdminAudit = lazy(() => import("./pages/admin/Audit"));
 const AdminContent = lazy(() => import("./pages/admin/Content"));
 const AdminCopy = lazy(() => import("./pages/admin/Copy"));
+const AdminConversations = lazy(() => import("./pages/admin/Conversations"));
 const AdminCustomers = lazy(() => import("./pages/admin/Customers"));
 const AdminMedia = lazy(() => import("./pages/admin/Media"));
 const AdminMessages = lazy(() => import("./pages/admin/Messages"));
@@ -36,6 +37,10 @@ const AdminPayments = lazy(() => import("./pages/admin/Payments"));
 const AdminSecurity = lazy(() => import("./pages/admin/Security"));
 const AdminSettings = lazy(() => import("./pages/admin/Settings"));
 const AdminSubscriptions = lazy(() => import("./pages/admin/Subscriptions"));
+const AdminReports = lazy(() => import("./pages/admin/Reports"));
+const AdminCoupons = lazy(() => import("./pages/admin/Coupons"));
+const AdminTeam = lazy(() => import("./pages/admin/Team"));
+const AdminNotifications = lazy(() => import("./pages/admin/Notifications"));
 
 function ScrollToTop() {
   const { pathname } = useLocation();
@@ -103,10 +108,16 @@ export default function App() {
                   <Route path="payments" element={<AdminPayments />} />
                   <Route path="customers" element={<AdminCustomers />} />
                   <Route path="subscriptions" element={<AdminSubscriptions />} />
+                  <Route path="chat" element={<AdminConversations />} />
+                  <Route path="conversations" element={<AdminConversations />} />
                   <Route path="messages" element={<AdminMessages />} />
                   <Route path="content" element={<AdminContent />} />
                   <Route path="copy" element={<AdminCopy />} />
                   <Route path="media" element={<AdminMedia />} />
+                  <Route path="reports" element={<AdminReports />} />
+                  <Route path="coupons" element={<AdminCoupons />} />
+                  <Route path="team" element={<AdminTeam />} />
+                  <Route path="notifications" element={<AdminNotifications />} />
                   <Route path="settings" element={<AdminSettings />} />
                   <Route path="audit" element={<AdminAudit />} />
                   <Route path="security" element={<AdminSecurity />} />

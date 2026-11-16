@@ -151,9 +151,13 @@ export function Header() {
               </Link>
             )}
 
-            <CTA to={navPaths.programs} size="sm" className="hidden xl:inline-flex" icon={false}>
-              {t.ui.subscribeNow}
-            </CTA>
+            {/* Wrapper keeps the button out of the mobile header: `cn` is a plain
+                join, so a `hidden` on the CTA itself loses to its base display. */}
+            <span className="hidden xl:block">
+              <CTA to={navPaths.programs} size="sm" icon={false}>
+                {t.ui.subscribeNow}
+              </CTA>
+            </span>
 
             <button
               type="button"

@@ -380,64 +380,68 @@ export default function Home() {
         </Reveal>
       </section>
 
-      {/* Results */}
-      <section className="border-y border-white/10 bg-ink-2/60 py-20 md:py-28">
-        <div className="container-x grid items-center gap-14 lg:grid-cols-2">
-          <Reveal>
-            <BeforeAfter
-              before={featured.before}
-              after={featured.after}
-              beforeLabel={t.resultsPage.before}
-              afterLabel={t.resultsPage.after}
-              name={featured.name}
-              stat={featured.stat}
-              hint={t.resultsPage.drag}
-            />
-          </Reveal>
-          <div>
-            <SectionHeading kicker={t.home.resultsKicker} title={t.home.resultsTitle} sub={t.home.resultsSub} />
-            <Reveal delay={0.08}>
-              <div className="mt-8 divide-y divide-white/10 border-y border-white/10">
-                {t.results.slice(0, 3).map((item) => (
-                  <div key={item.name} className="flex items-center justify-between gap-4 py-4">
-                    <div>
-                      <p className="font-display text-sm font-semibold text-cream">{item.name}</p>
-                      <p className="mt-0.5 text-xs text-cream/40">{item.duration}</p>
-                    </div>
-                    <span className="font-latin text-xl text-lemon">{item.stat}</span>
-                  </div>
-                ))}
-              </div>
-              <CTA to={navPaths.results} variant="outline" className="mt-8">
-                {t.home.resultsCta}
-              </CTA>
+      {/* Results — hidden until the doctor publishes a real, approved case. */}
+      {featured && (
+        <section className="border-y border-white/10 bg-ink-2/60 py-20 md:py-28">
+          <div className="container-x grid items-center gap-14 lg:grid-cols-2">
+            <Reveal>
+              <BeforeAfter
+                before={featured.before}
+                after={featured.after}
+                beforeLabel={t.resultsPage.before}
+                afterLabel={t.resultsPage.after}
+                name={featured.name}
+                stat={featured.stat}
+                hint={t.resultsPage.drag}
+              />
             </Reveal>
+            <div>
+              <SectionHeading kicker={t.home.resultsKicker} title={t.home.resultsTitle} sub={t.home.resultsSub} />
+              <Reveal delay={0.08}>
+                <div className="mt-8 divide-y divide-white/10 border-y border-white/10">
+                  {t.results.slice(0, 3).map((item) => (
+                    <div key={item.name} className="flex items-center justify-between gap-4 py-4">
+                      <div>
+                        <p className="font-display text-sm font-semibold text-cream">{item.name}</p>
+                        <p className="mt-0.5 text-xs text-cream/40">{item.duration}</p>
+                      </div>
+                      <span className="font-latin text-xl text-lemon">{item.stat}</span>
+                    </div>
+                  ))}
+                </div>
+                <CTA to={navPaths.results} variant="outline" className="mt-8">
+                  {t.home.resultsCta}
+                </CTA>
+              </Reveal>
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
+      )}
 
-      {/* Testimonials */}
-      <section className="py-20 md:py-28">
-        <div className="container-x">
-          <SectionHeading
-            kicker={t.home.testimonialsKicker}
-            title={t.home.testimonialsTitle}
-            align="center"
-            className="mx-auto max-w-2xl"
-          />
-        </div>
-        <div className="marquee-mask mt-12 overflow-hidden">
-          <div className="marquee-track gap-5">
-            {[0, 1].map((copy) => (
-              <div key={copy} className="flex gap-5 pe-5" aria-hidden={copy === 1}>
-                {t.testimonials.map((item) => (
-                  <TestimonialCard key={`${copy}-${item.name}`} item={item} />
-                ))}
-              </div>
-            ))}
+      {/* Testimonials — hidden until real, approved client quotes exist. */}
+      {t.testimonials.length > 0 && (
+        <section className="py-20 md:py-28">
+          <div className="container-x">
+            <SectionHeading
+              kicker={t.home.testimonialsKicker}
+              title={t.home.testimonialsTitle}
+              align="center"
+              className="mx-auto max-w-2xl"
+            />
           </div>
-        </div>
-      </section>
+          <div className="marquee-mask mt-12 overflow-hidden">
+            <div className="marquee-track gap-5">
+              {[0, 1].map((copy) => (
+                <div key={copy} className="flex gap-5 pe-5" aria-hidden={copy === 1}>
+                  {t.testimonials.map((item) => (
+                    <TestimonialCard key={`${copy}-${item.name}`} item={item} />
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* FAQ */}
       <section className="container-x pb-20 md:pb-28">

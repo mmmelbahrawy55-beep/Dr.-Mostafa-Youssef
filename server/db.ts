@@ -504,7 +504,7 @@ export async function deleteContent(id: string, collection: string): Promise<voi
 
 export type UserRow = {
   id: number;
-  role: "customer" | "admin";
+  role: "customer" | "admin" | "staff";
   name: string;
   email: string;
   phone: string;
@@ -539,7 +539,7 @@ export async function listUsers(): Promise<UserRow[]> {
 }
 
 export async function createUser(input: {
-  role: "customer" | "admin";
+  role: "customer" | "admin" | "staff";
   name: string;
   email: string;
   phone: string;
@@ -703,6 +703,8 @@ export type PaymentRow = {
   status: string;
   risk: string;
   note: string;
+  coupon?: string | null;
+  discount?: number;
   created_at: string;
   reviewed_at: string | null;
   screenshot_width?: number | null;
@@ -822,6 +824,91 @@ export async function countUnreadMessages(): Promise<number> {
   return rows.filter((row) => !row.read).length;
 }
 
+/* ------------------------------ doctor ↔ patient --------------------------- */
+
+export type CoachMessageRow = {
+  id: number;
+  user_id: number;
+  sender_role: "doctor" | "customer";
+  body: string;
+  media_name: string;
+  media_mime: string;
+  media_kind: "image" | "video" | "";
+  video_url: string;
+  read_by_customer: number;
+  read_by_doctor: number;
+  created_at: string;
+};
+
+export async function createCoachMessage(input: {
+  user_id: number;
+  sender_role: "doctor" | "customer";
+  body: string;
+  media_name?: string;
+  media_mime?: string;
+  media_kind?: "image" | "video" | "";
+  video_url?: string;
+}): Promise<number> {
+  const id = await nextId("coach_messages");
+  const fromDoctor = input.sender_role === "doctor";
+  await putRow("coach_messages", {
+    ...input,
+    id,
+    body: input.body ?? "",
+    media_name: input.media_name ?? "",
+    media_mime: input.media_mime ?? "",
+    media_kind: input.media_kind ?? "",
+    video_url: input.video_url ?? "",
+    // A doctor's message starts unread for the customer, and vice versa.
+    read_by_customer: fromDoctor ? 0 : 1,
+    read_by_doctor: fromDoctor ? 1 : 0,
+    created_at: nowIso(),
+  });
+  return id;
+}
+
+export async function listCoachMessagesByUser(userId: number): Promise<CoachMessageRow[]> {
+  const rows = await allRows<CoachMessageRow>("coach_messages");
+  return rows
+    .filter((row) => Number(row.user_id) === userId)
+    .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)) || Number(a.id) - Number(b.id));
+}
+
+export async function allCoachMessages(): Promise<CoachMessageRow[]> {
+  const rows = await allRows<CoachMessageRow>("coach_messages");
+  return rows.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+}
+
+export async function getCoachMessage(id: number): Promise<CoachMessageRow | undefined> {
+  return getRow<CoachMessageRow>("coach_messages", id);
+}
+
+/** Marks the other side's messages as seen when a conversation is opened. */
+export async function markCoachRead(userId: number, viewer: "doctor" | "customer"): Promise<void> {
+  const rows = await allRows<CoachMessageRow>("coach_messages");
+  for (const row of rows) {
+    if (Number(row.user_id) !== userId) continue;
+    if (viewer === "customer" && row.sender_role === "doctor" && !row.read_by_customer) {
+      await patchRow("coach_messages", row.id, { read_by_customer: 1 });
+    }
+    if (viewer === "doctor" && row.sender_role === "customer" && !row.read_by_doctor) {
+      await patchRow("coach_messages", row.id, { read_by_doctor: 1 });
+    }
+  }
+}
+
+export async function countUnreadCoachForDoctor(): Promise<number> {
+  const rows = await allRows<CoachMessageRow>("coach_messages");
+  return rows.filter((row) => row.sender_role === "customer" && !row.read_by_doctor).length;
+}
+
+export async function countUnreadCoachForCustomer(userId: number): Promise<number> {
+  const rows = await allRows<CoachMessageRow>("coach_messages");
+  return rows.filter(
+    (row) => Number(row.user_id) === userId && row.sender_role === "doctor" && !row.read_by_customer
+  ).length;
+}
+
 /* ---------------------------------- media ----------------------------------- */
 
 export type MediaRow = {
@@ -856,9 +943,232 @@ export async function deleteMedia(id: number): Promise<void> {
   await deleteRow("media", id);
 }
 
+/* ------------------------------ content assets ------------------------------ */
+
+/**
+ * Files the doctor attaches either to a plan (shown on that plan's page and to
+ * its subscribers) or to one client only (private, visible in their account).
+ * Bytes live in the shared file store; the row holds only metadata.
+ */
+export type AssetOwnerType = "program" | "customer";
+
+export type AssetRow = {
+  id: number;
+  owner_type: AssetOwnerType;
+  owner_id: string;
+  kind: string;
+  url: string;
+  storage: string;
+  filename: string;
+  mime: string;
+  size: number;
+  title: string;
+  note: string;
+  sort: number;
+  visibility: string;
+  seen_at?: string | null;
+  created_at: string;
+};
+
+export async function createAsset(input: Omit<AssetRow, "id">): Promise<AssetRow> {
+  const id = await nextId("assets");
+  const row: AssetRow = { ...input, id };
+  await putRow("assets", row);
+  return row;
+}
+
+export async function allAssets(): Promise<AssetRow[]> {
+  const rows = await allRows<AssetRow>("assets");
+  return rows.sort((a, b) => Number(a.sort) - Number(b.sort) || Number(a.id) - Number(b.id));
+}
+
+export async function listAssets(ownerType: AssetOwnerType, ownerId: string): Promise<AssetRow[]> {
+  return (await allAssets())
+    .filter((row) => row.owner_type === ownerType && String(row.owner_id) === String(ownerId))
+    .sort((a, b) => Number(a.sort ?? 0) - Number(b.sort ?? 0) || Number(a.id) - Number(b.id));
+}
+
+export async function getAsset(id: number): Promise<AssetRow | undefined> {
+  return getRow<AssetRow>("assets", id);
+}
+
+export async function updateAsset(id: number, patch: Partial<AssetRow>): Promise<AssetRow | undefined> {
+  return patchRow<AssetRow>("assets", id, patch);
+}
+
+export async function deleteAsset(id: number): Promise<void> {
+  await deleteRow("assets", id);
+}
+
+/** Marks every file the doctor uploaded for this client as opened. */
+export async function markCustomerFilesSeen(userId: number): Promise<void> {
+  const rows = await listAssets("customer", String(userId));
+  const stamp = nowIso();
+  for (const row of rows) {
+    if (!row.seen_at) await patchRow<AssetRow>("assets", row.id, { seen_at: stamp });
+  }
+}
+
+/* ------------------------------- client plan ------------------------------- */
+
+/** Measurements, macro targets and medical notes the doctor keeps per client. */
+export type ClientPlanRow = {
+  id: number;
+  user_id: number;
+  height_cm: number | null;
+  start_weight: number | null;
+  current_weight: number | null;
+  target_weight: number | null;
+  calories: number | null;
+  protein: number | null;
+  carbs: number | null;
+  fat: number | null;
+  goal: string;
+  medical_notes: string;
+  notes: string;
+  updated_at: string;
+};
+
+export async function getClientPlan(userId: number): Promise<ClientPlanRow | undefined> {
+  return getRow<ClientPlanRow>("client_plans", userId);
+}
+
+export async function saveClientPlan(row: ClientPlanRow): Promise<void> {
+  await putRow("client_plans", row);
+}
+
+/* --------------------------------- check-ins -------------------------------- */
+
+export type CheckinRow = {
+  id: number;
+  user_id: number;
+  weight: number | null;
+  note: string;
+  doctor_note: string;
+  reviewed: number;
+  photo: string;
+  created_at: string;
+};
+
+export async function createCheckin(input: Omit<CheckinRow, "id">): Promise<CheckinRow> {
+  const id = await nextId("checkins");
+  const row: CheckinRow = { ...input, id };
+  await putRow("checkins", row);
+  return row;
+}
+
+export async function getCheckin(id: number): Promise<CheckinRow | undefined> {
+  return getRow<CheckinRow>("checkins", id);
+}
+
+export async function listCheckinsByUser(userId: number): Promise<CheckinRow[]> {
+  const rows = await allRows<CheckinRow>("checkins");
+  return rows
+    .filter((row) => Number(row.user_id) === Number(userId))
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+}
+
+export async function allCheckins(): Promise<CheckinRow[]> {
+  const rows = await allRows<CheckinRow>("checkins");
+  return rows.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+}
+
+export async function updateCheckin(id: number, patch: Partial<CheckinRow>): Promise<CheckinRow | undefined> {
+  return patchRow<CheckinRow>("checkins", id, patch);
+}
+
+/* --------------------------------- coupons ---------------------------------- */
+
+export type CouponRow = {
+  id: number;
+  code: string;
+  kind: "percent" | "amount";
+  value: number;
+  max_uses: number;
+  used: number;
+  expires_at: string | null;
+  active: number;
+  created_at: string;
+};
+
+export async function listCoupons(): Promise<CouponRow[]> {
+  const rows = await allRows<CouponRow>("coupons");
+  return rows.sort((a, b) => Number(b.id) - Number(a.id));
+}
+
+export async function findCouponByCode(code: string): Promise<CouponRow | undefined> {
+  const needle = code.trim().toUpperCase();
+  if (!needle) return undefined;
+  const rows = await allRows<CouponRow>("coupons");
+  return rows.find((row) => String(row.code).toUpperCase() === needle);
+}
+
+export async function createCoupon(input: Omit<CouponRow, "id" | "used" | "created_at">): Promise<CouponRow> {
+  const id = await nextId("coupons");
+  const row: CouponRow = { ...input, id, used: 0, created_at: nowIso() };
+  await putRow("coupons", row);
+  return row;
+}
+
+export async function updateCoupon(id: number, patch: Partial<CouponRow>): Promise<CouponRow | undefined> {
+  return patchRow<CouponRow>("coupons", id, patch);
+}
+
+export async function deleteCoupon(id: number): Promise<void> {
+  await deleteRow("coupons", id);
+}
+
+/* ------------------------------- notifications ------------------------------ */
+
+export type NotificationRow = {
+  id: number;
+  user_id: number;
+  kind: string;
+  title: string;
+  body: string;
+  channel: string;
+  status: string;
+  read_by_admin: number;
+  created_at: string;
+};
+
+export async function createNotification(
+  input: Omit<NotificationRow, "id" | "read_by_admin" | "created_at">
+): Promise<NotificationRow> {
+  const id = await nextId("notifications");
+  const row: NotificationRow = { ...input, id, read_by_admin: 0, created_at: nowIso() };
+  await putRow("notifications", row);
+  return row;
+}
+
+export async function listNotifications(limit = 100): Promise<NotificationRow[]> {
+  const rows = await allRows<NotificationRow>("notifications");
+  return rows.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, limit);
+}
+
+export async function countUnreadNotifications(): Promise<number> {
+  const rows = await allRows<NotificationRow>("notifications");
+  return rows.filter((row) => !row.read_by_admin).length;
+}
+
+export async function markNotificationsRead(userId?: number): Promise<void> {
+  const rows = await allRows<NotificationRow>("notifications");
+  for (const row of rows) {
+    if (row.read_by_admin) continue;
+    if (userId !== undefined && Number(row.user_id) !== Number(userId)) continue;
+    await patchRow("notifications", row.id, { read_by_admin: 1 });
+  }
+}
+
 /* --------------------------------- file store -------------------------------- */
 
-type StoredFile = { mime: string; data: string };
+/**
+ * A stored file is either one base64 `data` value (small uploads: payment
+ * screenshots, pilot images, chat files ≤ 4 MB) or a `parts` count that points
+ * at `up:<name>:<i>` chunk values (any-size chat attachments, stored by the
+ * upload session below and persisted on attach).
+ */
+type StoredFile = { mime: string; data?: string; parts?: number; bytes?: number };
 
 /**
  * Binary payloads (payment screenshots, media-library images) are base64 JSON
@@ -875,6 +1185,7 @@ export async function putFile(name: string, buffer: Buffer, mime: string): Promi
   await redis.set(fileKey(name), JSON.stringify(payload));
 }
 
+/** Reads the bytes of a legacy single-value file (chunked files use getFilePart). */
 export async function getFile(name: string): Promise<{ mime: string; buffer: Buffer } | undefined> {
   const raw = await redis.get(fileKey(name));
   if (!raw) return undefined;
@@ -883,8 +1194,131 @@ export async function getFile(name: string): Promise<{ mime: string; buffer: Buf
   return { mime: parsed.mime || "application/octet-stream", buffer: Buffer.from(parsed.data, "base64") };
 }
 
+/** Small metadata row for either storage shape; media streaming reads parts itself. */
+export async function getFileMeta(name: string): Promise<StoredFile | undefined> {
+  const raw = await redis.get(fileKey(name));
+  if (!raw) return undefined;
+  const parsed = safeJson<StoredFile | null>(String(raw), null);
+  if (!parsed || typeof parsed !== "object" || (!parsed.data && !parsed.parts)) return undefined;
+  return parsed;
+}
+
 export async function deleteFile(name: string): Promise<void> {
+  const meta = await getFileMeta(name);
   await redis.del(fileKey(name));
+  if (meta?.parts) {
+    for (let index = 0; index < meta.parts; index += 1) {
+      await redis.del(chatUploadPartKey(name, index));
+    }
+  }
+}
+
+/* --------------------------- chunked chat uploads --------------------------- */
+
+/**
+ * A chat attachment travels as a session of ≤ 3 MB chunks, so a 64 MB video
+ * clears Vercel's 4.5 MB request cap by hitting it many times instead of once:
+ *
+ *   `um:<id>`        session metadata (owner, mime, declared bytes, chunk map)
+ *   `up:<id>:<i>`    one base64 chunk (≤ 4 MB encoded, under Upstash's 10 MB cap)
+ *   `ua:<id>`        claim that makes attach one-time (survives concurrent sends)
+ *
+ * Sessions expire after 24 h; attaching removes the TTL from the chunks and
+ * writes a permanent `f:<id>` meta row, so the file then lives as long as the
+ * message that references it.
+ */
+export type ChatUploadMeta = {
+  id: string;
+  userId: number;
+  mime: string;
+  kind: "image" | "video" | "file";
+  bytes: number;
+  chunks: number;
+  partBytes: number[];
+  createdAt: string;
+};
+
+const chatUploadKey = (id: string) => `${PREFIX}um:${id}`;
+const chatUploadPartKey = (id: string, index: number) => `${PREFIX}up:${id}:${index}`;
+const chatUploadClaimKey = (id: string) => `${PREFIX}ua:${id}`;
+const CHAT_UPLOAD_TTL_SECONDS = 24 * 60 * 60;
+const CHAT_UPLOAD_CLAIM_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+export async function createChatUpload(input: {
+  userId: number;
+  mime: string;
+  kind: "image" | "video" | "file";
+  bytes: number;
+  chunks: number;
+}): Promise<ChatUploadMeta> {
+  const id = randomBytes(18).toString("base64url");
+  const meta: ChatUploadMeta = { id, ...input, partBytes: [], createdAt: nowIso() };
+  await redis.set(chatUploadKey(id), JSON.stringify(meta), { ex: CHAT_UPLOAD_TTL_SECONDS });
+  return meta;
+}
+
+export async function getChatUpload(id: string): Promise<ChatUploadMeta | undefined> {
+  const raw = await redis.get(chatUploadKey(id));
+  const parsed = safeJson<ChatUploadMeta | null>(String(raw ?? ""), null);
+  return parsed && parsed.id ? parsed : undefined;
+}
+
+/**
+ * Stores one chunk. The chunk is written first and only then recorded in the
+ * metadata, so a failed write can only leave an unreported gap — never a
+ * reported chunk that is missing — which keeps retries safe.
+ */
+export async function putChatUploadPart(
+  id: string,
+  index: number,
+  buffer: Buffer
+): Promise<ChatUploadMeta | undefined> {
+  const meta = await getChatUpload(id);
+  if (!meta || index < 0 || index >= meta.chunks || buffer.length === 0) return undefined;
+  await redis.set(chatUploadPartKey(id, index), buffer.toString("base64"), { ex: CHAT_UPLOAD_TTL_SECONDS });
+  const partBytes = [...meta.partBytes];
+  while (partBytes.length < meta.chunks) partBytes.push(0);
+  partBytes[index] = buffer.length;
+  const next: ChatUploadMeta = { ...meta, partBytes };
+  await redis.set(chatUploadKey(id), JSON.stringify(next), { ex: CHAT_UPLOAD_TTL_SECONDS });
+  return next;
+}
+
+export async function getChatUploadPart(id: string, index: number): Promise<Buffer | undefined> {
+  const raw = await redis.get(chatUploadPartKey(id, index));
+  if (!raw) return undefined;
+  return Buffer.from(String(raw), "base64");
+}
+
+/** Only one sender may attach a given session (guards two concurrent sends). */
+export async function claimChatUpload(id: string): Promise<boolean> {
+  const result = await redis.set(chatUploadClaimKey(id), "1", {
+    nx: true,
+    ex: CHAT_UPLOAD_CLAIM_TTL_SECONDS,
+  });
+  return result === "OK";
+}
+
+export async function releaseChatUploadClaim(id: string): Promise<void> {
+  await redis.del(chatUploadClaimKey(id));
+}
+
+/**
+ * Freezes an upload: drops the TTL from every chunk and writes the permanent
+ * meta row that media streaming reads. Returns false when a chunk had already
+ * expired, in which case the caller releases the claim and asks for a re-upload.
+ */
+export async function attachChatUpload(meta: ChatUploadMeta): Promise<boolean> {
+  const freeze = redis.pipeline();
+  for (let index = 0; index < meta.chunks; index += 1) freeze.persist(chatUploadPartKey(meta.id, index));
+  const persisted = (await freeze.exec()) as unknown[];
+  if (persisted.length !== meta.chunks || persisted.some((result) => Number(result) !== 1)) return false;
+
+  const commit = redis.pipeline();
+  commit.set(fileKey(meta.id), JSON.stringify({ mime: meta.mime, parts: meta.chunks, bytes: meta.bytes }));
+  commit.del(chatUploadKey(meta.id));
+  await commit.exec();
+  return true;
 }
 
 /* ----------------------------------- seed ----------------------------------- */
@@ -922,7 +1356,7 @@ async function seedAdmin() {
 async function seedContent() {
   if ((await allRows("content_items")).length > 0) return;
 
-  const programImages = [images.gym, images.hero, images.dumbbells];
+  const programImages = [images.gym, images.hero, images.dumbbells, images.programTransform];
 
   const add = (item: ContentItem) => upsertContent(item);
 
@@ -935,7 +1369,7 @@ async function seedContent() {
       active: true,
       common: {
         amount: parseAmount(program.price),
-        days: 30,
+        days: program.days ?? 30,
         popular: program.popular,
         image: programImages[index] ?? images.gym,
       },
@@ -1146,6 +1580,65 @@ async function migrateLocalImages() {
  * bundled defaults. Items that already carry a system — including plans an
  * admin created — are never overwritten.
  */
+/**
+ * The free-trial plan was demo tooling: every real client now buys a package,
+ * so any plan flagged as a trial is removed on each cold start.
+ */
+async function removeTrialProgram() {
+  for (const row of await allRows<Row>("content_items")) {
+    if (String(row.collection) !== "programs") continue;
+    const common = safeJson<Record<string, unknown>>(row.common, {});
+    if (String(row.id) === "prog-trial" || common.trial === true) await deleteRow("content_items", row.id);
+  }
+}
+
+/**
+ * The internal "preview plan" (and any plan an older version flagged as a
+ * preview) is demo tooling, not a sellable plan: it is removed on every cold
+ * start so the site only ever lists real packages.
+ */
+async function removePreviewProgram() {
+  for (const row of await allRows<Row>("content_items")) {
+    if (String(row.collection) !== "programs") continue;
+    const common = safeJson<Record<string, unknown>>(row.common, {});
+    if (String(row.id) === "prog-preview" || common.preview === true) {
+      await deleteRow("content_items", row.id);
+      continue;
+    }
+    if ("preview" in common) {
+      delete common.preview;
+      await putRow("content_items", { ...row, common: JSON.stringify(common) });
+    }
+  }
+}
+
+/**
+ * The first release shipped sample testimonials, results and credentials so the
+ * layout could be reviewed. They are not real client data: remove exactly those
+ * seeded ids on every cold start. Anything the doctor creates from the dashboard
+ * gets a generated id, so real content is never touched.
+ */
+async function removeDemoContent() {
+  const demoIds = new Set<string>([
+    "tst-1",
+    "tst-2",
+    "tst-3",
+    "tst-4",
+    "tst-5",
+    "res-1",
+    "res-2",
+    "res-3",
+    "res-4",
+    "cred-1",
+    "cred-2",
+    "cred-3",
+    "cred-4",
+  ]);
+  for (const row of await allRows<Row>("content_items")) {
+    if (demoIds.has(String(row.id))) await deleteRow("content_items", row.id);
+  }
+}
+
 async function migrateProgramSystems() {
   for (const row of await allRows<Row>("content_items")) {
     if (String(row.collection) !== "programs") continue;
@@ -1172,6 +1665,9 @@ async function migrateProgramSystems() {
 async function seed() {
   await seedAdmin();
   await seedContent();
+  await removeTrialProgram();
+  await removePreviewProgram();
+  await removeDemoContent();
   await migrateProgramSystems();
   await seedUniqueClaimMarkers();
   if (!(await getSetting<SiteSettings | null>("site", null))) {

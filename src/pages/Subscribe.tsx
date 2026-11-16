@@ -10,6 +10,7 @@ import {
   CreditCard,
   ImagePlus,
   Info,
+  Loader2,
   Lock,
   ShieldCheck,
   Smartphone,
@@ -23,6 +24,7 @@ import { useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent } 
 import { Link, useParams } from "react-router-dom";
 import type { PaymentDTO } from "../../shared/types";
 import { PaymentBadges } from "../components/ui/PaymentBadges";
+import { AssetList } from "../components/ui/AssetList";
 import { Photo } from "../components/ui/Photo";
 import { Spinner } from "../components/ui/Spinner";
 import { useToast } from "../components/ui/Toast";
@@ -60,6 +62,7 @@ export default function Subscribe() {
     [t.programs, programId]
   );
   const amount = program?.amount ?? Number((program?.price ?? "0").replace(/[^\d]/g, "")) ?? 0;
+  const assets = program?.assets ?? [];
   const days = program?.days ?? 30;
 
   const [method, setMethod] = useState<Method>("vodafone");
@@ -71,6 +74,10 @@ export default function Subscribe() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<SubmitResult | null>(null);
+  const [couponCode, setCouponCode] = useState("");
+  const [coupon, setCoupon] = useState<{ code: string; discount: number; total: number } | null>(null);
+  const [couponBusy, setCouponBusy] = useState(false);
+  const total = coupon?.total ?? amount;
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -114,6 +121,32 @@ export default function Subscribe() {
     event.preventDefault();
     setDragging(false);
     acceptFile(event.dataTransfer.files?.[0]);
+  };
+
+  /** Checks a discount code against this plan before the client transfers. */
+  const applyCoupon = async () => {
+    if (!program) return;
+    setCouponBusy(true);
+    try {
+      const data = await api<{ code: string; discount: number; total: number }>("/api/coupons/validate", {
+        method: "POST",
+        body: { programId: program.contentId ?? program.id, code: couponCode.trim() },
+      });
+      setCoupon(data);
+      setCouponCode(data.code);
+      toast.success(ar ? `اتطبق خصم ${formatEgp(data.discount, lang)}.` : `Discount of ${formatEgp(data.discount, lang)} applied.`);
+    } catch (cause) {
+      setCoupon(null);
+      toast.error(
+        cause instanceof Error
+          ? localize(cause.message, lang)
+          : ar
+            ? "الكود غير صحيح أو انتهت صلاحيته."
+            : "That code is invalid or expired."
+      );
+    } finally {
+      setCouponBusy(false);
+    }
   };
 
   const submit = async (event: FormEvent) => {
@@ -163,7 +196,8 @@ export default function Subscribe() {
       form.append("sender", sender.trim());
       form.append("recipient", recipient.trim());
       form.append("reference", reference.trim());
-      form.append("amount", String(amount));
+      form.append("amount", String(total));
+      if (coupon) form.append("coupon", coupon.code);
       form.append("screenshot", upload);
 
       const payload = await api<SubmitResult>("/api/payments", { method: "POST", body: form });
@@ -726,6 +760,38 @@ export default function Subscribe() {
                   )}
                 </div>
 
+                <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.02] p-3">
+                  <p className="text-[10px] font-bold text-cream/45">{ar ? "عندك كود خصم؟" : "Have a discount code?"}</p>
+                  <div className="mt-2 flex gap-2">
+                    <input
+                      className="field flex-1 py-2 text-[11px] uppercase"
+                      placeholder={ar ? "اكتب الكود" : "Enter the code"}
+                      value={couponCode}
+                      onChange={(event) => {
+                        setCouponCode(event.target.value.toUpperCase());
+                        if (coupon) setCoupon(null);
+                      }}
+                      dir="ltr"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void applyCoupon()}
+                      disabled={couponBusy || !couponCode.trim()}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-lemon/40 bg-lemon/10 px-4 py-2 text-[10px] font-bold text-lemon disabled:opacity-50"
+                    >
+                      {couponBusy ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : null}
+                      {ar ? "تطبيق" : "Apply"}
+                    </button>
+                  </div>
+                  {coupon && (
+                    <p className="mt-2 text-[10px] text-emerald-200">
+                      {ar
+                        ? `خصم ${formatEgp(coupon.discount, lang)} — المطلوب ${formatEgp(coupon.total, lang)}`
+                        : `Discount ${formatEgp(coupon.discount, lang)} — pay ${formatEgp(coupon.total, lang)}`}
+                    </p>
+                  )}
+                </div>
+
                 {error && (
                   <p role="alert" className="mt-4 rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-[11px] leading-relaxed text-red-200">
                     {error}
@@ -735,7 +801,7 @@ export default function Subscribe() {
                 <button
                   type="submit"
                   disabled={busy}
-                  className="shine mt-5 inline-flex w-full items-center justify-center gap-2 rounded-full bg-lemon px-6 py-3.5 text-sm font-bold text-ink transition-all hover:-translate-y-0.5 hover:shadow-[0_18px_45px_-14px_rgba(212,255,63,0.65)] disabled:opacity-60"
+                  className="shine mt-5 inline-flex w-full items-center justify-center gap-2 rounded-full bg-lemon px-6 py-3.5 text-sm font-bold text-ink transition-all hover:-translate-y-0.5 hover:shadow-[0_18px_45px_-14px_rgba(28,36,23,0.32)] disabled:opacity-60"
                 >
                   {busy ? <Spinner className="text-ink" /> : <Wallet className="size-4" aria-hidden />}
                   {busy
@@ -743,8 +809,8 @@ export default function Subscribe() {
                       ? "بنرفع الإيصال ونتحقق…"
                       : "Uploading and verifying…"
                     : ar
-                      ? `أرسل الدفعة (${formatEgp(amount, lang)})`
-                      : `Submit payment (${formatEgp(amount, lang)})`}
+                      ? `أرسل الدفعة (${formatEgp(total, lang)})`
+                      : `Submit payment (${formatEgp(total, lang)})`}
                 </button>
 
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-[10px] text-cream/30">
@@ -786,6 +852,25 @@ export default function Subscribe() {
             </div>
           ))}
         </div>
+
+        {assets.length > 0 && (
+          <section className="mt-8 rounded-[1.6rem] border border-white/10 bg-white/[0.02] p-5 md:p-6">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-lemon">
+                  {ar ? "محتوى الباقة" : "Plan content"}
+                </p>
+                <h2 className="mt-1.5 text-xl">
+                  {ar ? "صور وفيديوهات وملفات الباقة" : "Photos, videos and files"}
+                </h2>
+              </div>
+              <span className="rounded-full border border-white/12 bg-white/[0.03] px-3 py-1 text-[10px] text-cream/50">
+                {assets.length} {ar ? "عنصر" : "items"}
+              </span>
+            </div>
+            <AssetList assets={assets} className="mt-4" />
+          </section>
+        )}
       </div>
 
       <AnimatePresence>

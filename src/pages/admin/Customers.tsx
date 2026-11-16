@@ -1,26 +1,90 @@
 import {
+  Activity,
+  ArrowUpRight,
   Ban,
   CalendarClock,
+  CalendarDays,
   CheckCircle2,
   ChevronDown,
+  Clock3,
+  CreditCard,
+  FileDown,
+  LayoutDashboard,
+  Loader2,
   Mail,
+  MessageSquareText,
+  MonitorSmartphone,
+  Paperclip,
   Phone,
   Plus,
   Search,
+  Settings2,
   ShieldCheck,
+  Stethoscope,
+  Target,
   UserRound,
   Users,
   Wallet,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import type { AdminCustomer, CustomerDetail, PaymentDTO } from "../../../shared/types";
+import { Link } from "react-router-dom";
+import type { AdminCustomer, CustomerActivityDTO, CustomerDetail, PaymentDTO } from "../../../shared/types";
 import { Spinner } from "../../components/ui/Spinner";
 import { useToast } from "../../components/ui/Toast";
 import { api, formatDate, formatDateTime, formatEgp } from "../../lib/api";
+import { downloadCustomerPdf } from "../../lib/customer-pdf";
 import { useLang } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
+import { AdminCheckins } from "../../components/account/AdminCheckins";
+import { PlanPanel } from "../../components/account/PlanPanel";
+import { AssetManager } from "./AssetManager";
 import { AdminField, AdminPage, Badge, EmptyState, Modal, PaymentStatus } from "./components";
 import { Pager } from "./Pager";
+
+type DetailTab =
+  | "overview"
+  | "plan"
+  | "checkins"
+  | "plans"
+  | "payments"
+  | "chat"
+  | "files"
+  | "activity"
+  | "settings";
+
+const ACTIVITY_ICON: Record<CustomerActivityDTO["kind"], typeof UserRound> = {
+  account: UserRound,
+  subscription: CalendarClock,
+  payment: Wallet,
+  chat: Stethoscope,
+  message: MessageSquareText,
+  session: MonitorSmartphone,
+};
+
+const ACTIVITY_TONE: Record<CustomerActivityDTO["kind"], string> = {
+  account: "bg-sky-400/10 text-sky-300",
+  subscription: "bg-lemon/10 text-lemon",
+  payment: "bg-violet-400/10 text-violet-200",
+  chat: "bg-emerald-400/10 text-emerald-200",
+  message: "bg-amber-400/10 text-amber-200",
+  session: "bg-white/5 text-cream/50",
+};
+
+function ActivityRow({ item }: { item: CustomerActivityDTO }) {
+  const Icon = ACTIVITY_ICON[item.kind];
+  return (
+    <li className="flex gap-3 rounded-xl border border-white/6 bg-white/[0.018] p-3">
+      <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-lg", ACTIVITY_TONE[item.kind])}>
+        <Icon className="size-3.5" aria-hidden />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="text-[11px] font-bold text-cream/80">{item.title}</p>
+        {item.detail && <p className="mt-0.5 line-clamp-2 text-[10px] leading-relaxed text-cream/35">{item.detail}</p>}
+        <p className="mt-1 text-[9px] text-cream/25">{formatDateTime(item.at)}</p>
+      </div>
+    </li>
+  );
+}
 
 export default function AdminCustomers() {
   const toast = useToast();
@@ -37,6 +101,9 @@ export default function AdminCustomers() {
 
   const [detail, setDetail] = useState<CustomerDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailTab, setDetailTab] = useState<DetailTab>("overview");
+  const [pdfing, setPdfing] = useState(false);
+  const [planSaving, setPlanSaving] = useState(false);
   const [editName, setEditName] = useState("");
   const [editEmail, setEditEmail] = useState("");
   const [editPhone, setEditPhone] = useState("");
@@ -76,7 +143,8 @@ export default function AdminCustomers() {
   }, [load, query]);
 
   const openDetail = useCallback(
-    async (id: number) => {
+    async (id: number, preserveTab = false) => {
+      if (!preserveTab) setDetailTab("overview");
       setDetailLoading(true);
       setDetail(null);
       try {
@@ -99,8 +167,21 @@ export default function AdminCustomers() {
 
   const refresh = useCallback(async () => {
     await load(query);
-    if (detail) await openDetail(detail.customer.id);
+    if (detail) await openDetail(detail.customer.id, true);
   }, [detail, load, openDetail, query]);
+
+  const exportPdf = async () => {
+    if (!detail || pdfing) return;
+    setPdfing(true);
+    try {
+      await downloadCustomerPdf(detail);
+      toast.success("تم تحميل بيان العميل PDF.");
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "تعذر إنشاء ملف PDF.");
+    } finally {
+      setPdfing(false);
+    }
+  };
 
   const saveProfile = async (event: FormEvent) => {
     event.preventDefault();
@@ -328,19 +409,407 @@ export default function AdminCustomers() {
           <div className="space-y-5">
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               {[
-                { label: "الاشتراكات النشطة", value: String(detail.customer.activeSubscriptions), icon: CheckCircle2 },
-                { label: "إجمالي المدفوع", value: formatEgp(detail.customer.spent), icon: Wallet },
-                { label: "آخر انتهاء", value: detail.customer.endsAt ? formatDate(detail.customer.endsAt) : "—", icon: CalendarClock },
-                { label: "عضو من", value: formatDate(detail.customer.createdAt), icon: UserRound },
+                {
+                  label: "الباقات النشطة",
+                  value: String(detail.stats.activeSubscriptions),
+                  hint: `${detail.stats.totalSubscriptions} اشتراك إجمالي`,
+                  icon: CheckCircle2,
+                },
+                {
+                  label: "إجمالي المدفوع",
+                  value: formatEgp(detail.stats.totalSpent),
+                  hint: `${detail.payments.length} دفعة · ${detail.stats.pendingPayments} معلقة`,
+                  icon: Wallet,
+                },
+                {
+                  label: "رسائل للدكتور",
+                  value: String(detail.stats.unreadCoach),
+                  hint: detail.stats.unreadCoach ? "غير مقروءة" : "كلها مقروءة",
+                  icon: MessageSquareText,
+                },
+                {
+                  label: "آخر ظهور",
+                  value: detail.stats.lastSeen ? formatDateTime(detail.stats.lastSeen) : "—",
+                  hint: `${detail.stats.sessions} جهاز مسجل`,
+                  icon: Clock3,
+                },
               ].map((item) => (
                 <div key={item.label} className="rounded-xl border border-white/8 bg-white/[0.02] p-3">
                   <item.icon className="size-4 text-lemon/70" aria-hidden />
                   <p className="mt-1.5 text-[9px] text-cream/35">{item.label}</p>
                   <p className="mt-0.5 truncate text-[11px] font-bold text-cream/85">{item.value}</p>
+                  <p className="mt-0.5 truncate text-[9px] text-cream/25">{item.hint}</p>
                 </div>
               ))}
             </div>
 
+            <div className="flex gap-1.5 overflow-x-auto border-b border-white/8 pb-2">
+              {([
+                { key: "overview", label: "نظرة عامة", icon: LayoutDashboard },
+                { key: "plan", label: "الخطة", icon: Target },
+                { key: "checkins", label: "المتابعة", count: detail.checkins.length, icon: Activity },
+                { key: "plans", label: "الباقات", count: detail.subscriptions.length, icon: CalendarDays },
+                { key: "payments", label: "المدفوعات", count: detail.payments.length, icon: CreditCard },
+                { key: "chat", label: "المحادثات", count: detail.coachMessages.length + detail.contactMessages.length, icon: MessageSquareText },
+                { key: "files", label: "الملفات", count: detail.files.length, icon: Paperclip },
+                { key: "activity", label: "النشاط", count: detail.activity.length, icon: Activity },
+                { key: "settings", label: "الإعدادات", icon: Settings2 },
+              ] as { key: DetailTab; label: string; count?: number; icon: typeof UserRound }[]).map((tab) => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => setDetailTab(tab.key)}
+                  className={cn(
+                    "inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[10px] font-bold transition",
+                    detailTab === tab.key
+                      ? "bg-lemon text-ink"
+                      : "border border-white/8 bg-white/[0.02] text-cream/50 hover:text-cream/80"
+                  )}
+                >
+                  <tab.icon className="size-3.5" aria-hidden />
+                  {tab.label}
+                  {tab.count !== undefined && (
+                    <span className={cn("rounded-full px-1.5 text-[9px]", detailTab === tab.key ? "bg-ink/10" : "bg-white/8")}>
+                      {tab.count}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => void exportPdf()}
+                disabled={pdfing}
+                className="inline-flex items-center gap-1.5 rounded-full border border-lemon/30 bg-lemon/10 px-4 py-2 text-[10px] font-bold text-lemon transition-colors hover:bg-lemon/15 disabled:opacity-60"
+              >
+                {pdfing ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : <FileDown className="size-3.5" aria-hidden />}
+                {pdfing ? "بنجهز الـ PDF..." : "تحميل بيانات العميل PDF"}
+              </button>
+              <span className="text-[10px] text-cream/30">ملف PDF كامل بكل بيانات العميل واشتراكاته ومدفوعاته.</span>
+            </div>
+
+            {detailTab === "overview" && (
+              <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
+                <div className="space-y-4">
+                  {detail.currentProgram ? (
+                    <div className="panel overflow-hidden">
+                      <div className="relative p-4">
+                        {detail.currentProgram.image && (
+                          <img
+                            src={detail.currentProgram.image}
+                            alt=""
+                            className="pointer-events-none absolute inset-0 size-full object-cover opacity-15"
+                          />
+                        )}
+                        <div className="relative">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="inline-flex items-center gap-1 rounded-full bg-lemon/15 px-2 py-0.5 text-[9px] font-bold text-lemon">
+                              <CheckCircle2 className="size-3" aria-hidden />
+                              الباقة الحالية
+                            </span>
+                            <span className="text-[10px] font-bold text-cream/45">{detail.currentProgram.daysLeft} يوم متبقي</span>
+                          </div>
+                          <h3 className="mt-2 text-lg font-extrabold text-cream">{detail.currentProgram.name}</h3>
+                          {detail.currentProgram.summary && (
+                            <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-cream/45">{detail.currentProgram.summary}</p>
+                          )}
+                          <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/8">
+                            <div className="h-full rounded-full bg-lemon" style={{ width: `${detail.currentProgram.progress}%` }} />
+                          </div>
+                          <div className="mt-1.5 flex items-center justify-between text-[9px] text-cream/30">
+                            <span>{formatDate(detail.currentProgram.startsAt)}</span>
+                            <span>{detail.currentProgram.progress}%</span>
+                            <span>{formatDate(detail.currentProgram.endsAt)}</span>
+                          </div>
+                          <div className="mt-3 grid grid-cols-4 gap-2">
+                            {[
+                              { label: "أسابيع", value: detail.currentProgram.weeks },
+                              { label: "تمارين", value: detail.currentProgram.workouts },
+                              { label: "وجبات", value: detail.currentProgram.meals },
+                              { label: "متابعة كل", value: detail.currentProgram.checkInEveryDays ? `${detail.currentProgram.checkInEveryDays}ي` : "—" },
+                            ].map((item) => (
+                              <div key={item.label} className="rounded-lg bg-white/[0.04] p-2 text-center">
+                                <p className="text-xs font-bold text-cream/80">{item.value}</p>
+                                <p className="mt-0.5 text-[8px] text-cream/30">{item.label}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="panel-soft px-5 py-8 text-center">
+                      <CalendarClock className="mx-auto size-7 text-cream/20" aria-hidden />
+                      <p className="mt-2 text-sm font-bold text-cream/70">مفيش باقة نشطة حاليًا</p>
+                      <p className="mt-1 text-[10px] text-cream/35">تقدر تضيف اشتراك يدوي من الإعدادات في أي وقت.</p>
+                      <button
+                        type="button"
+                        onClick={() => setDetailTab("settings")}
+                        className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-lemon px-4 py-2 text-[10px] font-bold text-ink"
+                      >
+                        <Plus className="size-3.5" aria-hidden />
+                        إضافة اشتراك
+                      </button>
+                    </div>
+                  )}
+
+                  <div>
+                    <div className="mb-2 flex items-center justify-between">
+                      <h3 className="text-sm font-bold text-cream">آخر نشاط</h3>
+                      <button type="button" onClick={() => setDetailTab("activity")} className="text-[10px] font-bold text-lemon/80">
+                        كل النشاط ←
+                      </button>
+                    </div>
+                    {detail.activity.length ? (
+                      <ul className="space-y-2">
+                        {detail.activity.slice(0, 5).map((item) => (
+                          <ActivityRow key={item.id} item={item} />
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="rounded-xl border border-dashed border-white/10 px-4 py-6 text-center text-[11px] text-cream/35">
+                        مفيش نشاط مسجل.
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="panel-soft p-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-bold text-cream">بيانات الحساب</h3>
+                      <Badge tone={detail.customer.blocked ? "rose" : "lemon"}>
+                        {detail.customer.blocked ? "موقوف" : "نشط"}
+                      </Badge>
+                    </div>
+                    <dl className="mt-3 space-y-2 text-[11px]">
+                      {[
+                        { label: "الإيميل", value: detail.customer.email, dir: "ltr" },
+                        { label: "الموبايل", value: detail.customer.phone || "—", dir: "ltr" },
+                        { label: "عضو من", value: formatDate(detail.customer.createdAt) },
+                        { label: "آخر ظهور", value: detail.stats.lastSeen ? formatDateTime(detail.stats.lastSeen) : "—" },
+                        { label: "آخر انتهاء", value: detail.customer.endsAt ? formatDate(detail.customer.endsAt) : "—" },
+                        { label: "رسائل الموقع", value: String(detail.stats.contactMessages) },
+                      ].map((row) => (
+                        <div key={row.label} className="flex items-center justify-between gap-3 border-b border-white/5 pb-1.5 last:border-0 last:pb-0">
+                          <dt className="shrink-0 text-cream/35">{row.label}</dt>
+                          <dd className="truncate font-bold text-cream/75" dir={row.dir}>
+                            {row.value}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setDetailTab("chat")}
+                        className="inline-flex items-center justify-center gap-1.5 rounded-full border border-lemon/25 bg-lemon/10 py-2 text-[10px] font-bold text-lemon"
+                      >
+                        <MessageSquareText className="size-3.5" aria-hidden />
+                        المحادثات
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDetailTab("settings")}
+                        className="inline-flex items-center justify-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] py-2 text-[10px] font-bold text-cream/60"
+                      >
+                        <Settings2 className="size-3.5" aria-hidden />
+                        تعديل الحساب
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="panel-soft p-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-bold text-cream">الأجهزة والجلسات</h3>
+                      <span className="text-[9px] text-cream/30">{detail.sessions.length} جلسة</span>
+                    </div>
+                    {detail.sessions.length === 0 ? (
+                      <p className="mt-3 text-[10px] text-cream/35">مفيش جلسات نشطة حاليًا.</p>
+                    ) : (
+                      <ul className="mt-3 space-y-2">
+                        {detail.sessions.slice(0, 4).map((session) => (
+                          <li key={`${session.createdAt}-${session.lastSeen}`} className="rounded-lg border border-white/6 bg-white/[0.02] p-2.5">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-cream/70">
+                                <MonitorSmartphone className="size-3.5 text-cream/35" aria-hidden />
+                                {session.ip || "IP غير معروف"}
+                              </span>
+                              <span className="text-[9px] text-cream/25">{formatDateTime(session.lastSeen)}</span>
+                            </div>
+                            {session.userAgent && <p className="mt-1 line-clamp-1 text-[9px] text-cream/25">{session.userAgent}</p>}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {detailTab === "plan" && (
+              <div className="rounded-2xl border border-white/8 bg-white/[0.02] p-4">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-sm font-bold text-cream">خطة العميل</h3>
+                  {detail.plan?.updatedAt && (
+                    <span className="text-[10px] text-cream/30">آخر تحديث {formatDateTime(detail.plan.updatedAt)}</span>
+                  )}
+                </div>
+                <PlanPanel
+                  plan={detail.plan}
+                  editable
+                  saving={planSaving}
+                  onSave={async (next) => {
+                    setPlanSaving(true);
+                    try {
+                      const data = await api<{ plan: CustomerDetail["plan"] }>(
+                        `/api/admin/customers/${detail.customer.id}/plan`,
+                        { method: "PUT", body: next }
+                      );
+                      setDetail((prev) => (prev ? { ...prev, plan: data.plan } : prev));
+                      toast.success("تم حفظ خطة العميل.");
+                    } catch (cause) {
+                      toast.error(cause instanceof Error ? cause.message : "تعذر حفظ الخطة.");
+                    } finally {
+                      setPlanSaving(false);
+                    }
+                  }}
+                />
+              </div>
+            )}
+
+            {detailTab === "checkins" && (
+              <div>
+                <h3 className="mb-2 text-sm font-bold text-cream">المتابعات ({detail.checkins.length})</h3>
+                <AdminCheckins
+                  customerId={detail.customer.id}
+                  checkins={detail.checkins}
+                  onReviewed={() => void refresh()}
+                />
+              </div>
+            )}
+
+            {detailTab === "chat" && (
+              <div className="grid gap-4 lg:grid-cols-2">
+                <section className="panel-soft flex flex-col p-4">
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <h3 className="inline-flex items-center gap-1.5 text-sm font-bold text-cream">
+                      <Stethoscope className="size-4 text-lemon/70" aria-hidden />
+                      محادثة الدكتور
+                      <span className="text-[9px] font-normal text-cream/30">({detail.coachMessages.length})</span>
+                    </h3>
+                    <Link
+                      to={`/admin/chat?user=${detail.customer.id}`}
+                      className="inline-flex items-center gap-1 text-[10px] font-bold text-lemon/80"
+                    >
+                      فتح والرد <ArrowUpRight className="size-3" aria-hidden />
+                    </Link>
+                  </div>
+                  {detail.coachMessages.length === 0 ? (
+                    <p className="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-[11px] text-cream/35">
+                      العميل لسه مابعتش ولا رسالة.
+                    </p>
+                  ) : (
+                    <div className="max-h-[420px] space-y-2 overflow-y-auto pe-1">
+                      {detail.coachMessages.map((message) => (
+                        <div
+                          key={message.id}
+                          className={cn(
+                            "rounded-xl border p-2.5",
+                            message.sender === "doctor"
+                              ? "border-lemon/20 bg-lemon/[0.06]"
+                              : "border-white/8 bg-white/[0.03]"
+                          )}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[9px] font-bold text-cream/45">
+                              {message.sender === "doctor" ? "الدكتور" : "العميل"}
+                            </span>
+                            <span className="text-[9px] text-cream/25">{formatDateTime(message.createdAt)}</span>
+                          </div>
+                          {message.body && (
+                            <p className="mt-1 whitespace-pre-wrap text-[11px] leading-relaxed text-cream/70">{message.body}</p>
+                          )}
+                          {message.mediaKind && message.mediaUrl && (
+                            <a
+                              href={message.mediaUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="mt-1.5 inline-flex items-center gap-1 text-[10px] font-bold text-lemon/80"
+                            >
+                              {message.mediaKind === "image" ? "📷 صورة مرفقة" : "🎬 فيديو مرفق"}
+                              <ArrowUpRight className="size-3" aria-hidden />
+                            </a>
+                          )}
+                          {message.videoUrl && (
+                            <a href={message.videoUrl} target="_blank" rel="noreferrer" className="mt-1 block truncate text-[10px] text-sky-300/80" dir="ltr">
+                              {message.videoUrl}
+                            </a>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </section>
+
+                <section className="panel-soft p-4">
+                  <h3 className="mb-3 inline-flex items-center gap-1.5 text-sm font-bold text-cream">
+                    <Mail className="size-4 text-lemon/70" aria-hidden />
+                    رسائل صفحة التواصل
+                    <span className="text-[9px] font-normal text-cream/30">({detail.contactMessages.length})</span>
+                  </h3>
+                  {detail.contactMessages.length === 0 ? (
+                    <p className="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-[11px] text-cream/35">
+                      مفيش رسائل من نموذج التواصل.
+                    </p>
+                  ) : (
+                    <ul className="max-h-[420px] space-y-2 overflow-y-auto pe-1">
+                      {detail.contactMessages.map((message) => (
+                        <li key={message.id} className="rounded-xl border border-white/8 bg-white/[0.03] p-2.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[9px] font-bold text-cream/45">{message.goal || "استفسار"}</span>
+                            <span className="text-[9px] text-cream/25">{formatDateTime(message.createdAt)}</span>
+                          </div>
+                          <p className="mt-1 whitespace-pre-wrap text-[11px] leading-relaxed text-cream/70">{message.body}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+              </div>
+            )}
+
+            {detailTab === "activity" && (
+              <div>
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-cream">سجل النشاط الكامل</h3>
+                  <span className="text-[10px] text-cream/30">{detail.activity.length} حدث</span>
+                </div>
+                {detail.activity.length ? (
+                  <ul className="space-y-2">
+                    {detail.activity.map((item) => (
+                      <ActivityRow key={item.id} item={item} />
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="rounded-xl border border-dashed border-white/10 px-4 py-10 text-center text-[11px] text-cream/35">
+                    مفيش نشاط مسجل.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {detailTab === "files" && (
+              <AssetManager
+                ownerType="customer"
+                ownerId={String(detail.customer.id)}
+                hint="أي حاجة ترفعها هنا بتظهر للعميل وحده في تبويب «ملفاتي» جوه حسابه."
+              />
+            )}
+
+            {detailTab === "settings" && (
             <div className="grid gap-5 lg:grid-cols-2">
               <form onSubmit={saveProfile} className="panel-soft space-y-3 p-4">
                 <div className="flex items-center justify-between">
@@ -430,7 +899,9 @@ export default function AdminCustomers() {
                 </p>
               </form>
             </div>
+            )}
 
+            {detailTab === "plans" && (
             <div>
               <h3 className="mb-2 text-sm font-bold text-cream">الاشتراكات ({detail.subscriptions.length})</h3>
               {detail.subscriptions.length === 0 ? (
@@ -448,12 +919,19 @@ export default function AdminCustomers() {
                       <p className="mt-1 text-[10px] text-cream/35">
                         {formatDate(subscription.startsAt)} — {formatDate(subscription.endsAt)}
                       </p>
+                      <p className="mt-1 text-[9px] text-cream/25">
+                        {subscription.status === "active" && String(subscription.endsAt) > new Date().toISOString()
+                          ? `نشطة · باقي ${Math.max(0, Math.ceil((new Date(subscription.endsAt).getTime() - Date.now()) / 86_400_000))} يوم`
+                          : `مدة ${Math.max(1, Math.ceil((new Date(subscription.endsAt).getTime() - new Date(subscription.startsAt).getTime()) / 86_400_000))} يوم`}
+                      </p>
                     </li>
                   ))}
                 </ul>
               )}
             </div>
+            )}
 
+            {detailTab === "payments" && (
             <div>
               <h3 className="mb-2 text-sm font-bold text-cream">المدفوعات ({detail.payments.length})</h3>
               {detail.payments.length === 0 ? (
@@ -468,8 +946,10 @@ export default function AdminCustomers() {
                         <th>الباقة</th>
                         <th>المبلغ</th>
                         <th>الطريقة</th>
+                        <th>رقم العملية</th>
                         <th>الحالة</th>
                         <th>التاريخ</th>
+                        <th>الإيصال</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -478,8 +958,23 @@ export default function AdminCustomers() {
                           <td>{payment.programName}</td>
                           <td>{formatEgp(payment.amount)}</td>
                           <td>{payment.method === "vodafone" ? "فودافون كاش" : "إنستاباي"}</td>
+                          <td className="max-w-28 truncate text-[10px] text-cream/40" dir="ltr">{payment.reference || "—"}</td>
                           <td><PaymentStatus status={payment.status} /></td>
                           <td className="whitespace-nowrap text-[11px] text-cream/40">{formatDateTime(payment.createdAt)}</td>
+                          <td>
+                            {payment.hasScreenshot ? (
+                              <a
+                                href={`/api/payments/${payment.id}/screenshot`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-1 rounded-full border border-lemon/25 px-2 py-1 text-[9px] font-bold text-lemon/80"
+                              >
+                                عرض <ArrowUpRight className="size-2.5" aria-hidden />
+                              </a>
+                            ) : (
+                              <span className="text-[9px] text-cream/25">—</span>
+                            )}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -487,6 +982,7 @@ export default function AdminCustomers() {
                 </div>
               )}
             </div>
+            )}
           </div>
         )}
       </Modal>

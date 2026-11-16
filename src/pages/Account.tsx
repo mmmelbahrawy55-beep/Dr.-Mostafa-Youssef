@@ -9,6 +9,7 @@ import {
   LayoutDashboard,
   LogOut,
   Mail,
+  MessageSquareText,
   Phone,
   ReceiptText,
   ShieldCheck,
@@ -18,10 +19,21 @@ import {
   XCircle,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import type { PaymentDTO, PublicUser, SubscriptionDTO } from "../../shared/types";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import type {
+  CheckinDTO,
+  ClientPlanDTO,
+  PaymentDTO,
+  PublicUser,
+  SiteAsset,
+  SubscriptionDTO,
+} from "../../shared/types";
 import { SessionsCard } from "../components/account/SessionsCard";
 import { MyProgram } from "../components/account/MyProgram";
+import { MyCheckins } from "../components/account/CheckinsPanel";
+import { PlanPanel } from "../components/account/PlanPanel";
+import { DoctorChat } from "../components/account/DoctorChat";
+import { AssetList } from "../components/ui/AssetList";
 import { PaymentBadges } from "../components/ui/PaymentBadges";
 import { Photo } from "../components/ui/Photo";
 import { Spinner } from "../components/ui/Spinner";
@@ -37,9 +49,13 @@ interface AccountPayload {
   user: PublicUser;
   subscriptions: SubscriptionDTO[];
   payments: PaymentDTO[];
+  files: SiteAsset[];
+  unseenFiles: number;
+  plan: ClientPlanDTO | null;
+  checkins: CheckinDTO[];
 }
 
-type Tab = "overview" | "program" | "payments" | "profile";
+type Tab = "overview" | "program" | "plan" | "checkins" | "chat" | "files" | "payments" | "profile";
 
 const STATUS: Record<
   PaymentDTO["status"],
@@ -113,7 +129,19 @@ export default function Account() {
 
   const [payload, setPayload] = useState<AccountPayload | null>(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<Tab>("overview");
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = useState<Tab>(() => {
+    const requested = searchParams.get("tab");
+    return requested === "program" ||
+      requested === "plan" ||
+      requested === "checkins" ||
+      requested === "chat" ||
+      requested === "files" ||
+      requested === "payments" ||
+      requested === "profile"
+      ? requested
+      : "overview";
+  });
   const [screenshot, setScreenshot] = useState<PaymentDTO | null>(null);
 
   const [name, setName] = useState("");
@@ -146,8 +174,17 @@ export default function Account() {
     void load();
   }, [load]);
 
+  // Opening “My files” clears the new-files badge for good.
+  useEffect(() => {
+    if (tab !== "files" || !payload?.unseenFiles) return;
+    void api("/api/account/files/seen", { method: "POST" })
+      .then(() => setPayload((prev) => (prev ? { ...prev, unseenFiles: 0 } : prev)))
+      .catch(() => undefined);
+  }, [tab, payload?.unseenFiles]);
+
   const subscriptions = payload?.subscriptions ?? [];
   const payments = payload?.payments ?? [];
+  const files = payload?.files ?? [];
 
   const active = useMemo(
     () =>
@@ -165,6 +202,7 @@ export default function Account() {
     .filter((item) => item.status === "approved" || item.status === "auto_approved")
     .reduce((sum, item) => sum + item.amount, 0);
   const pending = payments.filter((item) => item.status === "pending");
+  const pendingPayment = pending[0];
   const firstName = (payload?.user.name || user?.name || "").split(" ")[0];
 
   const handleLogout = async () => {
@@ -226,6 +264,10 @@ export default function Account() {
   const tabs: { key: Tab; label: string; count?: number }[] = [
     { key: "overview", label: ar ? "نظرة عامة" : "Overview" },
     ...(current ? [{ key: "program" as Tab, label: ar ? "برنامجي" : "My program" }] : []),
+    { key: "plan" as Tab, label: ar ? "خطتي" : "My plan" },
+    { key: "checkins" as Tab, label: ar ? "المتابعة" : "Follow-up", count: (payload?.checkins ?? []).length },
+    { key: "chat", label: ar ? "تواصل مع الدكتور" : "Doctor chat" },
+    { key: "files", label: ar ? "ملفاتي" : "My files", count: payload?.unseenFiles || undefined },
     { key: "payments", label: ar ? "المدفوعات" : "Payments", count: payments.length },
     { key: "profile", label: ar ? "بياناتي" : "Profile" },
   ];
@@ -345,6 +387,98 @@ export default function Account() {
             {tab === "overview" && (
               <div className="grid gap-5 lg:grid-cols-[1.25fr_0.75fr]">
                 <div className="space-y-5">
+                  <div className="panel relative overflow-hidden border border-lemon/20 bg-lemon/[0.045] p-5 md:p-6">
+                    <div className="flex items-start gap-3">
+                      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-lemon/12 text-lemon">
+                        <Sparkles className="size-5" aria-hidden />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-[9px] font-bold uppercase tracking-[0.16em] text-lemon/60">
+                          {ar ? "الخطوة التالية" : "Next step"}
+                        </p>
+                        <h2 className="mt-1 text-lg font-bold text-cream">
+                          {!current
+                            ? pendingPayment
+                              ? ar
+                                ? "دفعتك تحت المراجعة"
+                                : "Your payment is under review"
+                              : ar
+                                ? "ابدأ بأول خطوة"
+                                : "Start with your first step"
+                            : daysLeft <= 5
+                              ? ar
+                                ? "باقتك قربت تخلص"
+                                : "Your plan is ending soon"
+                              : ar
+                                ? "برنامجك جاهز"
+                                : "Your program is ready"}
+                        </h2>
+                        <p className="mt-1 text-[11px] leading-relaxed text-cream/45">
+                          {!current
+                            ? pendingPayment
+                              ? ar
+                                ? `دفعة «${pendingPayment.programName}» وصلت، وهنراجع التحويل ونفعّل الباقة في أقرب وقت.`
+                                : `Your ${pendingPayment.programName} payment arrived. We'll verify it and activate your plan shortly.`
+                              : ar
+                                ? "اختار الباقة المناسبة لهدفك، وابدأ برنامجك مع متابعة الدكتور خطوة بخطوة."
+                                : "Choose the plan that fits your goal and start your program with doctor follow-up."
+                            : daysLeft <= 5
+                              ? ar
+                                ? `فاضل ${daysLeft} يوم في «${current.programName}». جدّد دلوقتي عشان متقطعش برنامجك.`
+                                : `${daysLeft} days left on ${current.programName}. Renew now to keep your momentum.`
+                              : ar
+                                ? `فاضل ${daysLeft} يوم. افتح برنامج الأسبوع وابدأ التمرين، وأي سؤال ابعته للدكتور من المحادثة.`
+                                : `${daysLeft} days left. Open this week's program, and message the doctor with any question.`}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {!current && pendingPayment ? (
+                        <button
+                          type="button"
+                          onClick={() => setTab("payments")}
+                          className="inline-flex items-center gap-2 rounded-full bg-lemon px-4 py-2.5 text-xs font-bold text-ink"
+                        >
+                          {ar ? "تابع حالة الدفع" : "Track payment"}
+                          <ArrowUpRight className="size-4" aria-hidden />
+                        </button>
+                      ) : !current ? (
+                        <Link
+                          to="/programs"
+                          className="inline-flex items-center gap-2 rounded-full bg-lemon px-4 py-2.5 text-xs font-bold text-ink"
+                        >
+                          {ar ? "شوف الباقات" : "Browse plans"}
+                          <ArrowUpRight className="size-4" aria-hidden />
+                        </Link>
+                      ) : daysLeft <= 5 ? (
+                        <Link
+                          to={`/subscribe/${current.programId}`}
+                          className="inline-flex items-center gap-2 rounded-full bg-lemon px-4 py-2.5 text-xs font-bold text-ink"
+                        >
+                          {ar ? "جدّد الباقة" : "Renew plan"}
+                          <ArrowUpRight className="size-4" aria-hidden />
+                        </Link>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setTab("program")}
+                          className="inline-flex items-center gap-2 rounded-full bg-lemon px-4 py-2.5 text-xs font-bold text-ink"
+                        >
+                          {ar ? "افتح برنامجك" : "Open your program"}
+                          <ArrowUpRight className="size-4" aria-hidden />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setTab("chat")}
+                        className="inline-flex items-center gap-2 rounded-full border border-white/15 px-4 py-2.5 text-xs font-bold text-cream/70 transition-colors hover:border-lemon/40 hover:text-lemon"
+                      >
+                        <MessageSquareText className="size-4" aria-hidden />
+                        {ar ? "كلّم الدكتور" : "Message the doctor"}
+                      </button>
+                    </div>
+                  </div>
+
                   {current ? (
                     <div className="panel overflow-hidden">
                       <div className="relative">
@@ -521,6 +655,71 @@ export default function Account() {
 
             {tab === "program" && current && (
               <MyProgram subscription={current} daysLeft={daysLeft} totalDays={totalDays} />
+            )}
+
+            {tab === "plan" && (
+              <div className="panel p-5 md:p-7">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h2 className="text-lg">{ar ? "خطتي مع الدكتور" : "My plan"}</h2>
+                  {payload?.plan?.updatedAt && (
+                    <span className="text-[10px] text-cream/30">
+                      {ar ? "آخر تحديث " : "Updated "}
+                      {formatDateTime(payload.plan.updatedAt)}
+                    </span>
+                  )}
+                </div>
+                <PlanPanel plan={payload?.plan ?? null} className="mt-4" />
+              </div>
+            )}
+
+            {tab === "checkins" && (
+              <div className="panel p-5 md:p-7">
+                <h2 className="text-lg">{ar ? "المتابعة الأسبوعية" : "Weekly follow-up"}</h2>
+                <p className="mt-1 text-[11px] text-cream/40">
+                  {ar
+                    ? "كل أسبوع ابعت وزنك وملاحظاتك، والدكتور بيرد عليك هنا."
+                    : "Send your weight and notes every week; the doctor replies here."}
+                </p>
+                <div className="mt-4">
+                  <MyCheckins checkins={payload?.checkins ?? []} onSubmitted={() => void load()} />
+                </div>
+              </div>
+            )}
+
+            {tab === "chat" && <DoctorChat activePlan={Boolean(current)} />}
+
+            {tab === "files" && (
+              <div className="panel p-5 md:p-7">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-base">{ar ? "ملفاتك من الدكتور" : "Your files from the doctor"}</h2>
+                    <p className="mt-1 text-[11px] text-cream/40">
+                      {ar
+                        ? "صور وفيديوهات وملفات رفعها الدكتور لك خصوصًا — تفتحها أو تحملها من هنا."
+                        : "Photos, videos and files the doctor uploaded for you — open or download them here."}
+                    </p>
+                  </div>
+                  <span className="rounded-full border border-white/12 bg-white/[0.03] px-3 py-1 text-[10px] text-cream/45">
+                    {files.length} {ar ? "ملف" : "files"}
+                  </span>
+                </div>
+
+                {files.length === 0 ? (
+                  <div className="mt-6 rounded-2xl border border-dashed border-white/12 px-5 py-14 text-center">
+                    <ImageIcon className="mx-auto size-8 text-cream/20" aria-hidden />
+                    <p className="mt-3 text-sm text-cream/50">
+                      {ar ? "لسه مفيش ملفات مرفوعة لك." : "No files uploaded for you yet."}
+                    </p>
+                    <p className="mt-1 text-[11px] text-cream/30">
+                      {ar
+                        ? "أي صور أو فيديوهات أو خطط يبعتها الدكتور هتلاقيها هنا فورًا."
+                        : "Anything the doctor sends you appears here right away."}
+                    </p>
+                  </div>
+                ) : (
+                  <AssetList assets={files} className="mt-5" />
+                )}
+              </div>
             )}
 
             {tab === "payments" && (

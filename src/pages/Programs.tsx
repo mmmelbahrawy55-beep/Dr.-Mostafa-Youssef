@@ -44,6 +44,7 @@ export default function Programs() {
     t.programs.find((program) => program.popular) ??
     t.programs[0];
   const system = active?.system;
+  const paidPrograms = t.programs;
 
   const statRows = [
     {
@@ -98,8 +99,8 @@ export default function Programs() {
       <PageHero kicker={t.programsPage.kicker} title={t.programsPage.title} lead={t.programsPage.lead} />
 
       <section className="container-x pb-16 md:pb-20">
-        <div className="grid gap-5 lg:grid-cols-3">
-          {t.programs.map((program, index) => (
+        <div className={cn("grid gap-5", paidPrograms.length > 3 ? "md:grid-cols-2 xl:grid-cols-4" : "lg:grid-cols-3")}>
+          {paidPrograms.map((program, index) => (
             <Reveal key={program.id} delay={index * 0.08} className="h-full">
               <ProgramCard
                 program={program}
@@ -234,7 +235,7 @@ export default function Programs() {
                       <div>
                         <p className="font-latin text-4xl leading-none text-lemon">{active.price}</p>
                         <p className="mt-1 text-[10px] text-cream/40">
-                          {t.programsPage.currency} {t.programsPage.perMonth}
+                          {`${t.programsPage.currency} ${t.programsPage.perMonth}`}
                         </p>
                       </div>
                       <Link

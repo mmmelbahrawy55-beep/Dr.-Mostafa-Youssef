@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { useLocation, useOutlet } from "react-router-dom";
+import { Outlet, useLocation } from "react-router-dom";
 import { Footer } from "./Footer";
 import { Header } from "./Header";
 import { ScrollProgress } from "./ScrollProgress";
@@ -7,7 +7,6 @@ import { WhatsAppFab } from "./WhatsAppFab";
 
 export function Layout() {
   const location = useLocation();
-  const outlet = useOutlet();
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -25,7 +24,9 @@ export function Layout() {
             exit={{ opacity: 0, y: -6 }}
             transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
           >
-            {outlet}
+            {/* `Outlet` re-reads the matched route on every render; passing
+                `useOutlet()`'s element made AnimatePresence cache the old page. */}
+            <Outlet />
           </motion.div>
         </AnimatePresence>
       </main>

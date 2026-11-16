@@ -1,5 +1,6 @@
 import {
   ArrowUpRight,
+  Bell,
   BookOpenText,
   ClipboardList,
   CreditCard,
@@ -11,8 +12,12 @@ import {
   LogOut,
   Menu,
   MessageSquare,
+  MessagesSquare,
   Settings,
   ShieldCheck,
+  Tag,
+  TrendingUp,
+  UserCog,
   Users,
   Wallet,
   X,
@@ -31,7 +36,9 @@ interface AdminNavItem {
   label: string;
   icon: typeof Home;
   end?: boolean;
-  badge?: "pending" | "unread";
+  badge?: "pending" | "unread" | "coach";
+  /** Money, settings and staffing stay with the doctor. */
+  adminOnly?: boolean;
 }
 
 const SECTIONS: { title: string; items: AdminNavItem[] }[] = [
@@ -45,29 +52,42 @@ const SECTIONS: { title: string; items: AdminNavItem[] }[] = [
       { to: "/admin/payments", label: "المدفوعات", icon: CreditCard, badge: "pending" },
       { to: "/admin/customers", label: "العملاء", icon: Users },
       { to: "/admin/subscriptions", label: "الاشتراكات", icon: ClipboardList },
+      { to: "/admin/reports", label: "التقارير", icon: TrendingUp, adminOnly: true },
+      { to: "/admin/coupons", label: "الكوبونات", icon: Tag, adminOnly: true },
     ],
   },
   {
     title: "المحتوى",
     items: [
       { to: "/admin/content", label: "محتوى الموقع", icon: Files },
-      { to: "/admin/copy", label: "نصوص الموقع", icon: BookOpenText },
-      { to: "/admin/media", label: "الصور والوسائط", icon: ImageIcon },
+      { to: "/admin/copy", label: "نصوص الموقع", icon: BookOpenText, adminOnly: true },
+      { to: "/admin/media", label: "الصور والوسائط", icon: ImageIcon, adminOnly: true },
     ],
   },
   {
     title: "التواصل",
-    items: [{ to: "/admin/messages", label: "الرسائل", icon: MessageSquare, badge: "unread" }],
+    items: [
+      { to: "/admin/chat", label: "دردشة مع العملاء", icon: MessagesSquare, badge: "coach" },
+      { to: "/admin/messages", label: "رسائل الموقع", icon: MessageSquare, badge: "unread" },
+      { to: "/admin/notifications", label: "التنبيهات", icon: Bell },
+    ],
   },
   {
     title: "النظام",
     items: [
-      { to: "/admin/settings", label: "الإعدادات", icon: Settings },
-      { to: "/admin/security", label: "الأمان", icon: KeyRound },
-      { to: "/admin/audit", label: "سجل العمليات", icon: ShieldCheck },
+      { to: "/admin/team", label: "الفريق", icon: UserCog, adminOnly: true },
+      { to: "/admin/settings", label: "الإعدادات", icon: Settings, adminOnly: true },
+      { to: "/admin/security", label: "الأمان", icon: KeyRound, adminOnly: true },
+      { to: "/admin/audit", label: "سجل العمليات", icon: ShieldCheck, adminOnly: true },
     ],
   },
 ];
+
+const sectionsFor = (role: string | undefined) =>
+  SECTIONS.map((section) => ({
+    ...section,
+    items: section.items.filter((item) => !item.adminOnly || role === "admin"),
+  })).filter((section) => section.items.length > 0);
 
 export function AdminLayout() {
   const { user, logout } = useAuth();
@@ -75,7 +95,11 @@ export function AdminLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const [open, setOpen] = useState(false);
-  const [counts, setCounts] = useState<{ pending: number; unread: number }>({ pending: 0, unread: 0 });
+  const [counts, setCounts] = useState<{ pending: number; unread: number; coach: number }>({
+    pending: 0,
+    unread: 0,
+    coach: 0,
+  });
 
   useEffect(() => {
     setOpen(false);
@@ -83,16 +107,19 @@ export function AdminLayout() {
 
   useEffect(() => {
     let active = true;
-    (async () => {
+    const loadCounts = async () => {
       try {
         const data = await api<Overview>("/api/admin/overview");
-        if (active) setCounts({ pending: data.pendingCount, unread: data.unreadMessages });
+        if (active) setCounts({ pending: data.pendingCount, unread: data.unreadMessages, coach: data.coachUnread });
       } catch {
         /* counts are non-critical */
       }
-    })();
+    };
+    void loadCounts();
+    const timer = window.setInterval(() => void loadCounts(), 15_000);
     return () => {
       active = false;
+      window.clearInterval(timer);
     };
   }, [location.pathname]);
 
@@ -126,13 +153,19 @@ export function AdminLayout() {
       </div>
 
       <nav className="flex-1 overflow-y-auto px-3 py-4">
-        {SECTIONS.map((section) => (
+        {sectionsFor(user?.role).map((section) => (
           <div key={section.title} className="mb-5">
             <p className="mb-1.5 px-3 text-[9px] font-bold uppercase tracking-[0.18em] text-cream/25">{section.title}</p>
             <ul className="space-y-0.5">
               {section.items.map((item) => {
                 const badgeCount =
-                  item.badge === "pending" ? counts.pending : item.badge === "unread" ? counts.unread : 0;
+                  item.badge === "pending"
+                    ? counts.pending
+                    : item.badge === "unread"
+                      ? counts.unread
+                      : item.badge === "coach"
+                        ? counts.coach
+                        : 0;
                 return (
                   <li key={item.to}>
                     <NavLink
@@ -168,7 +201,7 @@ export function AdminLayout() {
           </span>
           <div className="min-w-0 flex-1">
             <p className="truncate text-[11px] font-bold text-cream">{user?.name}</p>
-            <p className="text-[9px] text-lemon/70">مدير الموقع</p>
+            <p className="text-[9px] text-lemon/70">{user?.role === "admin" ? "مدير الموقع" : "مساعد"}</p>
           </div>
           <button
             type="button"
@@ -228,7 +261,7 @@ export function AdminLayout() {
           <div className="flex items-center gap-2">
             <Link
               to="/admin/payments"
-              className="relative inline-flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1.5 text-[10px] font-semibold text-cream/55 transition-colors hover:border-lemon/40 hover:text-lemon"
+              className="relative hidden items-center gap-1.5 rounded-full border border-white/10 px-3 py-1.5 text-[10px] font-semibold text-cream/55 transition-colors hover:border-lemon/40 hover:text-lemon sm:inline-flex"
             >
               <CreditCard className="size-3.5" aria-hidden />
               مدفوعات معلقة

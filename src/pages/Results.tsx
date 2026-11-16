@@ -1,4 +1,4 @@
-import { ArrowUpRight, Info, Quote, Timer } from "lucide-react";
+import { ArrowUpRight, Quote, Timer } from "lucide-react";
 import { Link } from "react-router-dom";
 import { BeforeAfter } from "../components/ui/BeforeAfter";
 import { CTA } from "../components/ui/CTA";
@@ -18,6 +18,25 @@ export default function Results() {
       <PageHero kicker={t.resultsPage.kicker} title={t.resultsPage.title} lead={t.resultsPage.lead} />
 
       <section className="container-x pb-16 md:pb-24">
+        {!featured && (
+          <Reveal>
+            <div className="rounded-[2rem] border border-dashed border-white/15 bg-white/[0.02] px-6 py-16 text-center">
+              <Quote className="mx-auto size-8 text-lemon/40" aria-hidden />
+              <p className="mt-4 text-base font-semibold text-cream/70">
+                {ar ? "النتايج الحقيقية هتتنشر هنا بعد موافقة العملاء." : "Real client results are published here once they approve."}
+              </p>
+              <p className="mx-auto mt-2 max-w-lg text-xs leading-relaxed text-cream/40">
+                {ar
+                  ? "مفيش صور أو أرقام تجريبية على الموقع. كل حالة بتظهر بصورها وقياساتها الحقيقية وبعد إذن صاحبها."
+                  : "No sample photos or invented numbers here. Every case appears with real photos and measurements, with the client's permission."}
+              </p>
+              <CTA to={navPaths.contact} className="mt-6">
+                {t.resultsPage.cta}
+              </CTA>
+            </div>
+          </Reveal>
+        )}
+
         {featured && (
           <Reveal>
             <article className="panel-premium grid overflow-hidden rounded-[2.25rem] p-4 lg:grid-cols-[1.08fr_0.92fr] lg:gap-2 lg:p-6">
@@ -105,13 +124,6 @@ export default function Results() {
             </Reveal>
           ))}
         </div>
-
-        <Reveal className="mt-6">
-          <p className="flex items-start gap-2 rounded-2xl border border-white/10 bg-white/[0.02] p-4 text-xs leading-relaxed text-cream/40">
-            <Info className="mt-0.5 size-4 shrink-0 text-lemon/70" aria-hidden />
-            {t.resultsPage.demoNote}
-          </p>
-        </Reveal>
 
         <Reveal className="mt-9">
           <CTA to={navPaths.contact} size="lg">

@@ -24,16 +24,17 @@ export default function AdminGate() {
 
   if (!user) return <AdminLogin />;
 
-  if (user.role !== "admin") {
+  // Assistants (staff) run the daily work; only customers are turned away.
+  if (user.role !== "admin" && user.role !== "staff") {
     return (
       <div className="flex min-h-screen items-center justify-center px-5">
         <div className="max-w-md rounded-3xl border border-white/10 bg-white/[0.03] p-8 text-center">
           <div className="mx-auto flex size-14 items-center justify-center rounded-2xl bg-red-500/10 text-2xl">
             🔒
           </div>
-          <h1 className="mt-5 text-2xl">الصفحة دي للدكتور بس</h1>
+          <h1 className="mt-5 text-2xl">الصفحة دي لفريق الموقع بس</h1>
           <p className="mt-2 text-sm leading-relaxed text-cream/55">
-            حسابك مسجل كعميل، مش أدمن. لو محتاج صلاحية إضافية كلم إدارة الموقع.
+            حسابك مسجل كعميل، مش ضمن فريق الموقع. لو محتاج صلاحية إضافية كلم إدارة الموقع.
           </p>
           <a
             href="/account"

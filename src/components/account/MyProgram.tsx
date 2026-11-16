@@ -18,6 +18,7 @@ import { images } from "../../lib/images";
 import { useLang } from "../../lib/i18n";
 import { useSiteInfo } from "../../lib/use-site-info";
 import { cn } from "../../lib/utils";
+import { AssetList } from "../ui/AssetList";
 import { Photo } from "../ui/Photo";
 
 interface MyProgramProps {
@@ -360,6 +361,19 @@ export function MyProgram({ subscription, daysLeft, totalDays }: MyProgramProps)
           ))}
         </ul>
       </div>
+
+      {(program.assets?.length ?? 0) > 0 && (
+        <div className="panel p-5 md:p-6">
+          <h3 className="flex items-center gap-2 text-base">
+            <Sparkles className="size-4 text-lemon" aria-hidden />
+            {ar ? "محتوى الباقة من الدكتور" : "Plan content from your doctor"}
+          </h3>
+          <p className="mt-1 text-[10px] text-cream/35">
+            {ar ? "صور وفيديوهات وملفات مرفوعة خاصة بالباقة دي." : "Photos, videos and files uploaded for this plan."}
+          </p>
+          <AssetList assets={program.assets ?? []} className="mt-4" />
+        </div>
+      )}
 
       <p className="flex items-start gap-2 rounded-2xl border border-white/8 bg-white/[0.02] p-4 text-[10px] leading-relaxed text-cream/35">
         <ArrowUpRight className="mt-0.5 size-3.5 shrink-0 text-lemon/60" aria-hidden />

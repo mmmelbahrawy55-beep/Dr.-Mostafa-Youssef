@@ -38,24 +38,20 @@ export const en: Dict = {
   },
 
   hero: {
-    kicker: "Clinical nutrition · Training · Follow-up",
-    titleLine1: "Not a diet.",
-    titleLine2: "A full transformation.",
-    sub: "A nutrition plan built around your labs and body, training designed for your goal, and weekly follow-up on WhatsApp — science, not starvation.",
-    ctaPrimary: "Book your consultation",
-    ctaSecondary: "Calculate your calories free",
-    badges: ["Weekly custom plan", "WhatsApp follow-up", "Labs & supplements"],
+    kicker: "Clinical nutrition · Training · Performance",
+    titleLine1: "Not more training.",
+    titleLine2: "Train smarter.",
+    sub: "Nutrition and training built around your labs and goal — a clear weekly plan, real follow-up, and a direct line to the doctor. Strength isn't luck; it's a system.",
+    ctaPrimary: "Start your program",
+    ctaSecondary: "See the plans",
+    badges: ["Nutrition & training built for you", "Real weekly follow-up", "Direct chat with the doctor"],
     scroll: "Discover more",
     portraitName: "Dr. Mostafa Youssef",
     portraitRole: "Clinical Nutritionist & Fitness Coach",
   },
 
-  stats: [
-    { value: 1500, suffix: "+", label: "Clients who hit their goal" },
-    { value: 8, suffix: "+", label: "Years of experience" },
-    { value: 12, suffix: "K", label: "Kilos of fat lost" },
-    { value: 98, suffix: "%", label: "Follow-up & adherence" },
-  ],
+  // No invented numbers: the strip stays hidden until real, verifiable stats exist.
+  stats: [],
 
   marquee: [
     "Clinical nutrition",
@@ -124,7 +120,7 @@ export const en: Dict = {
     story: [
       "It started with a love of training, but what changed my path was seeing people spend years in the gym without results, and others crash-diet only to regain more than they lost. The problem usually isn't willpower — it's the plan.",
       "So I specialised in clinical nutrition and training together: understand the labs and the medical picture, build a realistic plan around the person's day and budget, and follow up week by week until the result holds.",
-      "Today I coach clients across Egypt and the Gulf, online and in clinic, and about 7 in 10 clients stay beyond three months — that's the number I care about most.",
+      "Today I coach clients across Egypt and the Gulf, online and in clinic, and weekly follow-up is what makes the result hold — not a promise built on a number.",
     ],
     valuesTitle: "How I work",
     values: [
@@ -146,12 +142,8 @@ export const en: Dict = {
       },
     ],
     credsTitle: "Specialisation & credentials",
-    creds: [
-      { year: "2014", title: "BSc in Health Sciences & Nutrition", place: "Zagazig University" },
-      { year: "2016", title: "Diploma in Clinical Nutrition", place: "Faculty of Medicine" },
-      { year: "2018", title: "Certified Personal Trainer", place: "NASM — equivalent" },
-      { year: "2021", title: "Sports Nutrition Specialisation", place: "Accredited international program" },
-    ],
+    // Credentials are added from the dashboard only after the doctor confirms them.
+    creds: [],
     quote: "A diet you can't keep is a failure from day one. Choose a plan that fits your life, not the other way around.",
     ctaTitle: "Want to start with your labs and your day?",
     ctaText: "A 30-minute first consultation to understand your case and map out a clear plan.",
@@ -538,6 +530,7 @@ export const en: Dict = {
         ],
       },
     },
+
   ],
 
   resultsPage: {
@@ -549,90 +542,20 @@ export const en: Dict = {
     drag: "Drag",
     statLabel: "Result",
     durationLabel: "Duration",
-    demoNote: "Photos shown are placeholders for the demo — they'll be replaced with real client photos after consent.",
     cta: "Want a result like this? Start your consultation",
   },
 
-  results: [
-    {
-      name: "Mohamed Abdelrahman",
-      duration: "7 months",
-      stat: "− 24 kg",
-      before: images.gymMan,
-      after: images.hero,
-      summary: "Fat loss while keeping muscle, with better blood pressure and daily energy.",
-    },
-    {
-      name: "Nourhan Samy",
-      duration: "5 months",
-      stat: "− 16 kg",
-      before: images.heroAlt,
-      after: images.woman,
-      summary: "Postpartum program focused on protein and light resistance training at home.",
-    },
-    {
-      name: "Ahmed Fathy",
-      duration: "9 months",
-      stat: "+ 9 kg muscle",
-      before: images.gym,
-      after: images.dumbbells,
-      summary: "A clean bulking phase with progressive loading while keeping body fat stable.",
-    },
-    {
-      name: "Sara Ibrahim",
-      duration: "6 months",
-      stat: "− 12 kg",
-      before: images.gymMan,
-      after: images.coach,
-      summary: "Working with PCOS and insulin resistance, restoring cycle regularity and improving labs.",
-    },
-  ],
+  // Sample cases were removed. Real cases are added from the dashboard, with
+  // the client's approval and their actual before/after photos.
+  results: [],
 
   testimonialSection: {
     kicker: "Testimonials",
     title: "Words from people who did it.",
   },
 
-  testimonials: [
-    {
-      name: "Mohamed A.",
-      role: "Engineer — Zagazig",
-      quote:
-        "First time I've stuck with a program past two months. The weekly check-ins keep you going, and the food is normal — no starvation.",
-      rating: 5,
-      result: "− 24 kg",
-    },
-    {
-      name: "Sara E.",
-      role: "Dentist — Giza",
-      quote:
-        "I had insulin resistance and PCOS. The plan fit my work, and my labs genuinely improved.",
-      rating: 5,
-      result: "− 12 kg",
-    },
-    {
-      name: "Ahmed F.",
-      role: "Gym athlete — Alexandria",
-      quote: "Progressive training done right — no injuries. I gained 9 kg of muscle without adding fat.",
-      rating: 5,
-      result: "+ 9 kg muscle",
-    },
-    {
-      name: "Nourhan S.",
-      role: "Mother of two — Mansoura",
-      quote:
-        "After pregnancy I felt lost. A home plan with simple equipment and food my family eats made it possible.",
-      rating: 5,
-      result: "− 16 kg",
-    },
-    {
-      name: "Karim M.",
-      role: "Founder — Dubai",
-      quote: "Coached online from Dubai, quick replies and constant adjustments. My HbA1c went from 7.2 to 5.6.",
-      rating: 5,
-      result: "HbA1c 5.6",
-    },
-  ],
+  // Only real, approved client quotes are published from the dashboard.
+  testimonials: [],
 
   calculator: {
     kicker: "Free tool",

@@ -158,6 +158,7 @@ async function main() {
       backup.status === 200 &&
         Array.isArray(backup.data.users) &&
         Array.isArray(backup.data.payments) &&
+        Array.isArray(backup.data.coachMessages) &&
         backup.data.settings,
       `status ${backup.status}`
     );

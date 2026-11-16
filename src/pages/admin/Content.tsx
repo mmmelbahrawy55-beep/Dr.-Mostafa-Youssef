@@ -7,6 +7,7 @@ import { api } from "../../lib/api";
 import { starterProgramSystem } from "../../lib/program-system";
 import { useSiteData } from "../../lib/site-data";
 import { cn } from "../../lib/utils";
+import { AssetManager } from "./AssetManager";
 import { AdminField, AdminPage, Badge, EmptyState, Modal } from "./components";
 import { ProgramSystemEditor } from "./ProgramSystemEditor";
 
@@ -609,6 +610,14 @@ export default function AdminContent() {
                 </div>
               );
             })}
+
+            {collection === "programs" && !isNew && (
+              <AssetManager
+                ownerType="program"
+                ownerId={draft.id}
+                hint="الصور والفيديوهات والملفات دي بتظهر على صفحة الباقة ونفسها لأي مشترك فيها."
+              />
+            )}
 
             <details className="rounded-xl border border-white/8 bg-white/[0.015] p-3.5">
               <summary className="flex cursor-pointer items-center gap-1.5 text-[10px] font-bold text-cream/45">

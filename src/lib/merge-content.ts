@@ -1,4 +1,4 @@
-import type { ContentItem, CopyOverrides, SiteData } from "../../shared/types";
+import type { ContentItem, CopyOverrides, SiteAsset, SiteData } from "../../shared/types";
 import type { Dict, IconKey, Lang, PostBlock } from "../content/types";
 import { ensureProgramSystem } from "./program-system";
 import { avatarFor } from "./images";
@@ -97,6 +97,7 @@ function applySiteContent(dict: Dict, lang: Lang, data: SiteData) {
         amount,
         days: num(item.common.days, 30),
         image: str(item.common.image),
+        assets: Array.isArray(item.common.assets) ? (item.common.assets as SiteAsset[]) : [],
         name: localized(item, lang, "name", `الباقة ${index + 1}`),
         price: formatPrice(amount),
         tagline: localized(item, lang, "tagline"),
@@ -164,7 +165,9 @@ function applySiteContent(dict: Dict, lang: Lang, data: SiteData) {
     }));
   }
 
-  if (data.credentials && data.credentials.length > 0) {
+  // Always mirror the dashboard, including an empty list, so removed sample
+  // credentials never fall back to the old bundled copy.
+  if (Array.isArray(data.credentials)) {
     dict.about.creds = data.credentials.map((item) => ({
       year: localized(item, lang, "year"),
       title: localized(item, lang, "title"),

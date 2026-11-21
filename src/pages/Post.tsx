@@ -70,7 +70,7 @@ export default function Post() {
                 <p className="font-display text-base font-semibold text-cream">{t.hero.portraitName}</p>
                 <p className="mt-1 text-xs text-cream/45">{t.hero.portraitRole}</p>
               </div>
-              <CTA to={navPaths.calculator} size="sm">
+              <CTA to={navPaths.programs} size="sm">
                 {t.hero.ctaSecondary}
               </CTA>
             </div>

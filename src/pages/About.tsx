@@ -20,7 +20,7 @@ export default function About() {
       >
         <div className="flex flex-wrap gap-3">
           <CTA to={navPaths.contact}>{t.ui.book}</CTA>
-          <CTA to={navPaths.calculator} variant="outline">
+          <CTA to={navPaths.programs} variant="outline">
             {t.hero.ctaSecondary}
           </CTA>
         </div>

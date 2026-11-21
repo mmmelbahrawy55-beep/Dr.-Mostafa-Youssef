@@ -105,7 +105,7 @@ export default function Home() {
                 <CTA to={navPaths.contact} size="lg">
                   {t.hero.ctaPrimary}
                 </CTA>
-                <CTA to={navPaths.calculator} size="lg" variant="outline">
+                <CTA to={navPaths.programs} size="lg" variant="outline">
                   {t.hero.ctaSecondary}
                 </CTA>
               </div>

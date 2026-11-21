@@ -1,4 +1,5 @@
-import { Download, FileText, Lock, PlayCircle } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, FileText, Lock, Maximize2, PlayCircle, X } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import type { SiteAsset } from "../../../shared/types";
 import { formatDateTime } from "../../lib/api";
@@ -10,10 +11,129 @@ interface AssetListProps {
   className?: string;
 }
 
+/** Full-screen photo viewer: the whole image is visible at its real proportions. */
+function ImageViewer({
+  images,
+  index,
+  onChange,
+  onClose,
+}: {
+  images: SiteAsset[];
+  index: number;
+  onChange: (index: number) => void;
+  onClose: () => void;
+}) {
+  const { lang } = useLang();
+  const ar = lang === "ar";
+  const asset = images[index];
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+      if (event.key === "ArrowLeft") onChange((index + 1) % images.length);
+      if (event.key === "ArrowRight") onChange((index - 1 + images.length) % images.length);
+    };
+    window.addEventListener("keydown", onKey);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [index, images.length, onChange, onClose]);
+
+  if (!asset) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[130] flex flex-col bg-ink/95 backdrop-blur-md"
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+    >
+      <div
+        className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="min-w-0">
+          <p className="truncate text-xs font-bold text-cream">{asset.title || asset.filename}</p>
+          <p className="mt-0.5 text-[10px] text-cream/40">
+            {index + 1} / {images.length}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <a
+            href={asset.url}
+            download
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-full border border-white/15 px-3 py-1.5 text-[10px] font-bold text-cream/70 hover:border-lemon/40 hover:text-lemon"
+          >
+            <Download className="size-3" aria-hidden />
+            {ar ? "تحميل" : "Download"}
+          </a>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={ar ? "إغلاق" : "Close"}
+            className="rounded-full border border-white/15 p-1.5 text-cream/70 hover:border-lemon/40 hover:text-lemon"
+          >
+            <X className="size-4" aria-hidden />
+          </button>
+        </div>
+      </div>
+
+      <div
+        className="relative flex flex-1 items-center justify-center overflow-hidden px-3 py-4 sm:px-16"
+        onClick={(event) => event.stopPropagation()}
+      >
+        {images.length > 1 && (
+          <button
+            type="button"
+            onClick={() => onChange((index - 1 + images.length) % images.length)}
+            aria-label={ar ? "الصورة السابقة" : "Previous"}
+            className="absolute start-2 top-1/2 z-10 -translate-y-1/2 rounded-full border border-white/15 bg-ink/70 p-2.5 text-cream/70 transition-colors hover:border-lemon/50 hover:text-lemon sm:start-4"
+          >
+            <ChevronRight className="size-5" aria-hidden />
+          </button>
+        )}
+        <img
+          src={asset.url}
+          alt={asset.title || (ar ? "صورة" : "Photo")}
+          className="max-h-full max-w-full rounded-xl object-contain shadow-2xl"
+        />
+        {images.length > 1 && (
+          <button
+            type="button"
+            onClick={() => onChange((index + 1) % images.length)}
+            aria-label={ar ? "الصورة التالية" : "Next"}
+            className="absolute end-2 top-1/2 z-10 -translate-y-1/2 rounded-full border border-white/15 bg-ink/70 p-2.5 text-cream/70 transition-colors hover:border-lemon/50 hover:text-lemon sm:end-4"
+          >
+            <ChevronLeft className="size-5" aria-hidden />
+          </button>
+        )}
+      </div>
+
+      {(asset.title || asset.note) && (
+        <div
+          className="border-t border-white/10 px-4 py-3"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <p className="mx-auto max-w-3xl text-center text-[11px] font-bold text-cream/80">{asset.title}</p>
+          {asset.note && (
+            <p className="mx-auto mt-1 max-w-3xl text-center text-[11px] leading-relaxed text-cream/50">{asset.note}</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Renders the photos, videos and files the doctor attached to a plan or a client. */
 export function AssetList({ assets, className }: AssetListProps) {
   const { lang } = useLang();
   const ar = lang === "ar";
+  const [viewer, setViewer] = useState<number | null>(null);
   if (!assets.length) return null;
 
   const locked = assets.filter((asset) => asset.locked);
@@ -65,20 +185,37 @@ export function AssetList({ assets, className }: AssetListProps) {
             {ar ? "صور من الدكتور" : "Photos from the doctor"}
           </h3>
           <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {images.map((asset) => (
+            {images.map((asset, index) => (
               <figure key={asset.id} className="panel-soft overflow-hidden">
-                <a href={asset.url} target="_blank" rel="noreferrer" className="block">
-                  <img
-                    src={asset.url}
-                    alt={asset.title || (ar ? "صورة" : "Photo")}
-                    loading="lazy"
-                    className="aspect-[4/3] w-full object-cover"
-                  />
-                </a>
+                <button
+                  type="button"
+                  onClick={() => setViewer(index)}
+                  aria-label={ar ? "تكبير الصورة" : "Enlarge photo"}
+                  className="group relative block w-full bg-ink"
+                >
+                  <span className="flex aspect-[4/3] w-full items-center justify-center">
+                    <img
+                      src={asset.url}
+                      alt={asset.title || (ar ? "صورة" : "Photo")}
+                      loading="lazy"
+                      className="max-h-full max-w-full object-contain"
+                    />
+                  </span>
+                  <span className="pointer-events-none absolute inset-0 flex items-end justify-center bg-gradient-to-t from-ink/85 via-transparent to-transparent pb-3 opacity-0 transition-opacity group-hover:opacity-100">
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-ink/85 px-3 py-1.5 text-[10px] font-bold text-cream ring-1 ring-white/15">
+                      <Maximize2 className="size-3" aria-hidden />
+                      {ar ? "تكبير" : "View"}
+                    </span>
+                  </span>
+                </button>
                 {(asset.title || asset.note) && (
-                  <figcaption className="px-3 py-2">
-                    {asset.title && <p className="truncate text-[11px] font-bold text-cream/80">{asset.title}</p>}
-                    {asset.note && <p className="mt-0.5 text-[10px] leading-relaxed text-cream/40">{asset.note}</p>}
+                  <figcaption className="px-3 py-2.5">
+                    {asset.title && (
+                      <p className="text-[11px] font-bold leading-snug text-cream/85">{asset.title}</p>
+                    )}
+                    {asset.note && (
+                      <p className="mt-1 text-[10px] leading-relaxed text-cream/45">{asset.note}</p>
+                    )}
                   </figcaption>
                 )}
               </figure>
@@ -170,6 +307,15 @@ export function AssetList({ assets, className }: AssetListProps) {
             ))}
           </ul>
         </div>
+      )}
+
+      {viewer !== null && images[viewer] && (
+        <ImageViewer
+          images={images}
+          index={viewer}
+          onChange={setViewer}
+          onClose={() => setViewer(null)}
+        />
       )}
     </div>
   );

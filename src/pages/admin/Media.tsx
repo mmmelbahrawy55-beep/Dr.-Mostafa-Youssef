@@ -1,5 +1,18 @@
-import { ClipboardCopy, ImageIcon, Info, Loader2, Trash2, UploadCloud } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  ClipboardCopy,
+  ExternalLink,
+  ImageIcon,
+  Info,
+  Loader2,
+  Maximize2,
+  Trash2,
+  UploadCloud,
+  X,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 import type { MediaItem } from "../../../shared/types";
 import { Spinner } from "../../components/ui/Spinner";
 import { useToast } from "../../components/ui/Toast";
@@ -22,6 +35,154 @@ function formatSize(bytes: number) {
   return `${Math.max(1, Math.round(bytes / 1024))} كيلوبايت`;
 }
 
+/**
+ * Full-screen viewer: images keep their real proportions (nothing is cropped)
+ * so any text inside the photo stays readable, with prev/next and shortcuts.
+ */
+function MediaViewer({
+  items,
+  index,
+  onChange,
+  onClose,
+  onCopy,
+  onDelete,
+  confirmId,
+}: {
+  items: MediaItem[];
+  index: number;
+  onChange: (index: number) => void;
+  onClose: () => void;
+  onCopy: (url: string) => void;
+  onDelete: (id: number) => void;
+  confirmId: number | null;
+}) {
+  const item = items[index];
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+      if (event.key === "ArrowLeft") onChange((index + 1) % items.length);
+      if (event.key === "ArrowRight") onChange((index - 1 + items.length) % items.length);
+    };
+    window.addEventListener("keydown", onKey);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [index, items.length, onChange, onClose]);
+
+  if (!item) return null;
+  const meta = [
+    formatSize(item.size),
+    item.width && item.height ? `${item.width} × ${item.height} بكسل` : null,
+    item.uploadedByName ? `رفعها ${item.uploadedByName}` : null,
+    formatDate(item.createdAt),
+  ].filter(Boolean);
+
+  return (
+    <div
+      className="fixed inset-0 z-[130] flex flex-col bg-ink/95 backdrop-blur-md"
+      role="dialog"
+      aria-modal="true"
+      aria-label={item.filename}
+      onClick={onClose}
+    >
+      <div
+        className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="min-w-0">
+          <p className="truncate text-xs font-bold text-cream" dir="ltr">
+            {item.filename}
+          </p>
+          <p className="mt-0.5 text-[10px] text-cream/40">
+            {index + 1} من {items.length}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => void onCopy(item.url)}
+            className="inline-flex items-center gap-1.5 rounded-full border border-white/15 px-3 py-1.5 text-[10px] font-bold text-cream/70 hover:border-lemon/40 hover:text-lemon"
+          >
+            <ClipboardCopy className="size-3" aria-hidden />
+            نسخ الرابط
+          </button>
+          <a
+            href={item.url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-full border border-white/15 px-3 py-1.5 text-[10px] font-bold text-cream/70 hover:border-lemon/40 hover:text-lemon"
+          >
+            <ExternalLink className="size-3" aria-hidden />
+            فتح
+          </a>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="إغلاق"
+            className="rounded-full border border-white/15 p-1.5 text-cream/70 hover:border-lemon/40 hover:text-lemon"
+          >
+            <X className="size-4" aria-hidden />
+          </button>
+        </div>
+      </div>
+
+      <div
+        className="relative flex flex-1 items-center justify-center overflow-hidden px-3 py-4 sm:px-16"
+        onClick={(event) => event.stopPropagation()}
+      >
+        {items.length > 1 && (
+          <button
+            type="button"
+            onClick={() => onChange((index - 1 + items.length) % items.length)}
+            aria-label="الصورة السابقة"
+            className="absolute start-2 top-1/2 z-10 -translate-y-1/2 rounded-full border border-white/15 bg-ink/70 p-2.5 text-cream/70 transition-colors hover:border-lemon/50 hover:text-lemon sm:start-4"
+          >
+            <ChevronRight className="size-5" aria-hidden />
+          </button>
+        )}
+        <img
+          src={item.url}
+          alt={item.filename}
+          className="max-h-full max-w-full rounded-xl object-contain shadow-2xl"
+        />
+        {items.length > 1 && (
+          <button
+            type="button"
+            onClick={() => onChange((index + 1) % items.length)}
+            aria-label="الصورة التالية"
+            className="absolute end-2 top-1/2 z-10 -translate-y-1/2 rounded-full border border-white/15 bg-ink/70 p-2.5 text-cream/70 transition-colors hover:border-lemon/50 hover:text-lemon sm:end-4"
+          >
+            <ChevronLeft className="size-5" aria-hidden />
+          </button>
+        )}
+      </div>
+
+      <div
+        className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 px-4 py-3"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <p className="text-[10px] text-cream/45">{meta.join(" · ")}</p>
+        <button
+          type="button"
+          onClick={() => onDelete(item.id)}
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-[10px] font-bold",
+            confirmId === item.id
+              ? "border-red-400/60 bg-red-500/20 text-red-100"
+              : "border-red-400/40 text-red-200 hover:bg-red-500/10"
+          )}
+        >
+          <Trash2 className="size-3" aria-hidden />
+          {confirmId === item.id ? "اضغط تاني لتأكيد الحذف" : "حذف الصورة"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function AdminMedia() {
   const toast = useToast();
   const { data: site } = useSiteData();
@@ -30,6 +191,7 @@ export default function AdminMedia() {
   const [uploading, setUploading] = useState(false);
   const [confirmId, setConfirmId] = useState<number | null>(null);
   const [detail, setDetail] = useState<MediaItem | null>(null);
+  const [viewer, setViewer] = useState<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -85,31 +247,41 @@ export default function AdminMedia() {
       setMedia((prev) => prev.filter((item) => item.id !== id));
       setConfirmId(null);
       setDetail((current) => (current?.id === id ? null : current));
+      setViewer((current) => (current !== null && media[current]?.id === id ? null : current));
       toast.success("تم حذف الصورة.");
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : "تعذر حذف الصورة.");
     }
   };
 
-  /** Where this exact file is referenced on the live site. */
-  const usedIn = (url: string) => {
-    const places: string[] = [];
+  /** Where this exact file is referenced on the live site, with a link to it. */
+  const usedIn = (url: string): { label: string; href: string }[] => {
+    const places: { label: string; href: string }[] = [];
     const title = (item: { id: string; ar: Record<string, unknown>; en: Record<string, unknown> }, key: string) =>
       String(item.ar[key] ?? item.en[key] ?? item.id);
     if (!site) return places;
-    if (String(site.settings?.hero?.image ?? "") === url) places.push("صورة الغلاف (الهيرو)");
+    if (String(site.settings?.hero?.image ?? "") === url) places.push({ label: "صورة الغلاف (الهيرو)", href: "/" });
     for (const program of site.programs ?? []) {
-      if (String(program.common?.image ?? "") === url) places.push(`باقة: ${title(program, "name")}`);
+      if (String(program.common?.image ?? "") === url) {
+        places.push({ label: `باقة: ${title(program, "name")}`, href: `/subscribe/${program.id}` });
+      }
     }
     for (const service of site.services ?? []) {
-      if (String(service.common?.image ?? "") === url) places.push(`خدمة: ${title(service, "title")}`);
+      if (String(service.common?.image ?? "") === url) {
+        places.push({ label: `خدمة: ${title(service, "title")}`, href: "/services" });
+      }
     }
     for (const post of site.posts ?? []) {
-      if (String(post.common?.cover ?? "") === url) places.push(`مقال: ${title(post, "title")}`);
+      if (String(post.common?.cover ?? "") === url) {
+        places.push({
+          label: `مقال: ${title(post, "title")}`,
+          href: `/blog/${String(post.common.slug ?? post.id)}`,
+        });
+      }
     }
     for (const result of site.results ?? []) {
       if (String(result.common?.before ?? "") === url || String(result.common?.after ?? "") === url) {
-        places.push(`نتيجة قبل/بعد: ${title(result, "name")}`);
+        places.push({ label: `نتيجة قبل/بعد: ${title(result, "name")}`, href: "/results" });
       }
     }
     return places;
@@ -175,24 +347,64 @@ export default function AdminMedia() {
         </div>
       ) : (
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {media.map((item) => (
-            <div key={item.id} className="panel-soft overflow-hidden">
-              <div className="relative aspect-[4/3] bg-ink">
-                <img src={item.url} alt={item.filename} className="size-full object-cover" loading="lazy" />
-              </div>
+          {media.map((item, index) => {
+            const places = usedIn(item.url);
+            return (
+            <div key={item.id} className="panel-soft group overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setViewer(index)}
+                aria-label={`تكبير ${item.filename}`}
+                className="relative block w-full bg-ink"
+              >
+                <span className="flex aspect-[4/3] w-full items-center justify-center">
+                  <img
+                    src={item.url}
+                    alt={item.filename}
+                    loading="lazy"
+                    className="max-h-full max-w-full object-contain"
+                  />
+                </span>
+                {item.width && item.height && (
+                  <span className="pointer-events-none absolute top-2 start-2 rounded-md bg-ink/80 px-1.5 py-0.5 text-[9px] font-bold text-cream/70 ring-1 ring-white/10">
+                    {item.width}×{item.height}
+                  </span>
+                )}
+                <span className="pointer-events-none absolute inset-0 flex items-end justify-center bg-gradient-to-t from-ink/85 via-transparent to-transparent pb-3 opacity-0 transition-opacity group-hover:opacity-100">
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-ink/85 px-3 py-1.5 text-[10px] font-bold text-cream ring-1 ring-white/15">
+                    <Maximize2 className="size-3" aria-hidden />
+                    تكبير
+                  </span>
+                </span>
+              </button>
               <div className="p-3">
-                <p className="truncate text-[10px] font-semibold text-cream/70" dir="ltr">
+                <p className="line-clamp-2 break-all text-[11px] font-semibold leading-snug text-cream/75" dir="ltr">
                   {item.filename}
                 </p>
-                <p className="mt-0.5 text-[9px] text-cream/30">
+                <p className="mt-1 text-[10px] text-cream/40">
                   {formatSize(item.size)} · {formatDate(item.createdAt)}
                 </p>
-                <p className="truncate text-[9px] text-cream/30">رفعها: {item.uploadedByName || "غير معروف"}</p>
-                <div className="mt-2 flex gap-1.5">
+                <p className="mt-0.5 text-[10px] text-cream/40">رفعها: {item.uploadedByName || "غير معروف"}</p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {(places.length > 0
+                    ? places.slice(0, 2)
+                    : [{ label: "شوف صفحة الباقات", href: "/programs" }]
+                  ).map((place) => (
+                    <Link
+                      key={place.label}
+                      to={place.href}
+                      className="inline-flex max-w-full items-center gap-1 rounded-full border border-lemon/25 bg-lemon/10 px-2 py-1 text-[9px] font-bold text-lemon transition-colors hover:bg-lemon/20"
+                    >
+                      <ExternalLink className="size-2.5 shrink-0" aria-hidden />
+                      <span className="truncate">{place.label}</span>
+                    </Link>
+                  ))}
+                </div>
+                <div className="mt-2.5 flex gap-1.5">
                   <button
                     type="button"
                     onClick={() => void copy(item.url)}
-                    className="inline-flex flex-1 items-center justify-center gap-1 rounded-lg border border-white/10 py-1.5 text-[9px] font-bold text-cream/55 hover:border-lemon/40 hover:text-lemon"
+                    className="inline-flex flex-1 items-center justify-center gap-1 rounded-lg border border-white/10 py-1.5 text-[10px] font-bold text-cream/55 hover:border-lemon/40 hover:text-lemon"
                   >
                     <ClipboardCopy className="size-3" aria-hidden />
                     نسخ الرابط
@@ -200,7 +412,7 @@ export default function AdminMedia() {
                   <button
                     type="button"
                     onClick={() => setDetail(item)}
-                    className="inline-flex items-center justify-center gap-1 rounded-lg border border-white/10 px-2 py-1.5 text-[9px] font-bold text-cream/55 hover:border-lemon/40 hover:text-lemon"
+                    className="inline-flex items-center justify-center gap-1 rounded-lg border border-white/10 px-2 py-1.5 text-[10px] font-bold text-cream/55 hover:border-lemon/40 hover:text-lemon"
                     aria-label="تفاصيل الصورة"
                   >
                     <Info className="size-3" aria-hidden />
@@ -210,7 +422,7 @@ export default function AdminMedia() {
                     type="button"
                     onClick={() => void remove(item.id)}
                     className={cn(
-                      "inline-flex items-center justify-center gap-1 rounded-lg border px-2 py-1.5 text-[9px] font-bold",
+                      "inline-flex items-center justify-center gap-1 rounded-lg border px-2 py-1.5 text-[10px] font-bold",
                       confirmId === item.id
                         ? "border-red-400/50 bg-red-500/15 text-red-100"
                         : "border-white/10 text-cream/40 hover:border-red-400/40 hover:text-red-200"
@@ -223,7 +435,8 @@ export default function AdminMedia() {
                 </div>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -262,22 +475,42 @@ export default function AdminMedia() {
         {detail && (
           <div className="grid gap-5 md:grid-cols-2">
             <div>
-              <img src={detail.url} alt={detail.filename} className="max-h-56 w-full rounded-xl border border-white/10 bg-ink object-contain" />
-              <div className="mt-3">
-                <p className="text-[10px] font-bold text-cream/45">مستخدمة في</p>
-                {usedIn(detail.url).length === 0 ? (
-                  <p className="mt-1 text-[11px] text-cream/35">لسه مش مستخدمة في أي مكان على الموقع.</p>
-                ) : (
-                  <ul className="mt-1 space-y-1">
-                    {usedIn(detail.url).map((place) => (
-                      <li key={place} className="flex items-center gap-1.5 text-[11px] text-cream/70">
-                        <span className="size-1.5 shrink-0 rounded-full bg-lemon" aria-hidden />
-                        {place}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  const index = media.findIndex((item) => item.id === detail.id);
+                  if (index >= 0) setViewer(index);
+                }}
+                className="block w-full"
+                aria-label="تكبير الصورة"
+              >
+                <img
+                  src={detail.url}
+                  alt={detail.filename}
+                  className="max-h-56 w-full rounded-xl border border-white/10 bg-ink object-contain"
+                />
+              </button>
+                <div className="mt-3">
+                  <p className="text-[10px] font-bold text-cream/45">مستخدمة في</p>
+                  {usedIn(detail.url).length === 0 ? (
+                    <p className="mt-1 text-[11px] text-cream/35">لسه مش مستخدمة في أي مكان على الموقع.</p>
+                  ) : (
+                    <ul className="mt-1 space-y-1">
+                      {usedIn(detail.url).map((place) => (
+                        <li key={place.label} className="flex items-center gap-1.5 text-[11px]">
+                          <span className="size-1.5 shrink-0 rounded-full bg-lemon" aria-hidden />
+                          <Link
+                            to={place.href}
+                            className="inline-flex items-center gap-1 text-cream/70 underline-offset-2 hover:text-lemon hover:underline"
+                          >
+                            {place.label}
+                            <ExternalLink className="size-3" aria-hidden />
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
             </div>
             <div>
               <DetailRow label="تاريخ الرفع">{formatDateTime(detail.createdAt)}</DetailRow>
@@ -299,6 +532,18 @@ export default function AdminMedia() {
           </div>
         )}
       </Modal>
+
+      {viewer !== null && media[viewer] && (
+        <MediaViewer
+          items={media}
+          index={viewer}
+          onChange={setViewer}
+          onClose={() => setViewer(null)}
+          onCopy={(url) => void copy(url)}
+          onDelete={(id) => void remove(id)}
+          confirmId={confirmId}
+        />
+      )}
     </AdminPage>
   );
 }
